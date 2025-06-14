@@ -212,20 +212,19 @@ st.markdown("""
 
 
 # --- Configurações da Base de Dados ---
-# ********************************************************************************
-# *** MUITO IMPORTANTE: O NOME DO SEU SERVIDOR/INSTÂNCIA SQL SERVER ***
-# *** Conforme a sua captura de ecrã, é 'SusanaGonçalves\\SQLEXPRESS' ***
-# *** Se o seu computador não se chama 'SusanaGonçalves', ALTERE esta linha! ***
-# ********************************************************************************
-DB_SERVER = 'SusanaGonçalves\\SQLEXPRESS'
-DB_DATABASE = 'GestaoHoras'
-DB_DRIVER = '{ODBC Driver 17 for SQL Server}' # Certifique-se que tem este driver instalado
+# Utilizando Streamlit Secrets para gerir as credenciais da base de dados Azure SQL
+DB_DRIVER = st.secrets["connections.sql_server"]["driver"]
+DB_SERVER = st.secrets["connections.sql_server"]["server"]
+DB_DATABASE = st.secrets["connections.sql_server"]["database"]
+DB_UID = st.secrets["connections.sql_server"]["uid"]
+DB_PWD = st.secrets["connections.sql_server"]["pwd"]
+
 
 # --- Funções de Conexão à Base de Dados ---
 @st.cache_resource
 def get_db_connection():
     """
-    Estabelece e cacheia a conexão com a base de dados.
+    Estabelece e cacheia a conexão com a base de dados Azure SQL.
     Esta função inclui mensagens de erro detalhadas para ajudar na depuração.
     """
     try:
@@ -233,20 +232,15 @@ def get_db_connection():
             f'DRIVER={DB_DRIVER};'
             f'SERVER={DB_SERVER};'
             f'DATABASE={DB_DATABASE};'
-            f'Trusted_Connection=yes;' # Usa autenticação do Windows. O usuário que executa o script precisa de permissões no SQL Server.
+            f'UID={DB_UID};'
+            f'PWD={DB_PWD};'
+            f'Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;' # Parâmetros para conexão segura com Azure SQL
         )
         return conn
     except pyodbc.Error as ex:
         sqlstate = ex.args[0]
-        # Extrai o nome da instância para a mensagem de erro
-        instance_name = DB_SERVER.split('\\')[-1] if '\\' in DB_SERVER else DB_SERVER
-        st.error(f"Erro de Conexão à Base de Dados (SQLSTATE: {sqlstate}): {ex}")
-        st.info("Por favor, verifique os seguintes pontos para resolver o problema de conexão:")
-        st.info(f"• O serviço 'SQL Server ({instance_name})' está em execução no seu computador.")
-        st.info(f"• O '{DB_DRIVER}' está instalado no seu sistema (verifique se a versão 32/64 bits corresponde à sua instalação Python).")
-        st.info(f"• A firewall do Windows não está a bloquear a conexão (tente permitir o 'sqlservr.exe' ou a porta 1433 para TCP).")
-        st.info(f"• O utilizador atual do Windows (aquele que está a correr este script Streamlit) tem permissões para aceder à base de dados '{DB_DATABASE}'.")
-        st.info(f"• O nome do servidor '{DB_SERVER}' está **EXATO** (incluindo o nome do computador e da instância, se aplicável).")
+        st.error(f"Erro de Conexão à Base de Dados Azure SQL (SQLSTATE: {sqlstate}): {ex}")
+        st.info("Por favor, verifique as credenciais da base de dados e as regras de firewall no Portal Azure.")
         return None
 
 # Função genérica para executar queries de escrita (INSERT, UPDATE, DELETE)
