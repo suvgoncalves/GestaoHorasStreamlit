@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/local_configs.toml # Se tiver configs locais que não quer no Git
+
+# Database/Sensitive files (exemplos, ajuste conforme necessário)
+*.db
+*.sqlite
+*.csv
+*.xlsx
+# Certifique-se de que DB_SERVER, DB_DATABASE, DB_DRIVER não estão no código expostos, e se forem sensíveis, não os commite.
+# Se tiver algum ficheiro com credenciais, adicione-o aqui
+credentials.json
+.env
+
+
+# Windows
+Thumbs.db
