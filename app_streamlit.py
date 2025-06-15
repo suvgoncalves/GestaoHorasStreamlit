@@ -1,531 +1,552 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+import pyodbc
+from datetime import datetime, date, time, timedelta
 import calendar
-import io # Para to_excel
+from decimal import Decimal # Importar Decimal para verificação de tipo
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib import colors
+from io import BytesIO # Para lidar com o PDF em memória
 
-# --- INICIALIZAÇÃO DO ESTADO DA SESSÃO ---
-# ISSO DEVE ESTAR AQUI, NO INÍCIO, ANTES DE QUALQUER LEITURA DE st.session_state
-if 'active_tab_index' not in st.session_state:
-    st.session_state.active_tab_index = 0 # Define a aba Dashboard (índice 0) como padrão
+# --- Configurações da Página ---
+st.set_page_config(
+    page_title="Sistema de Gestão de Horas",
+    page_icon="⏰",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- CSS Personalizado ---
+st.markdown("""
+<style>
+    /* Variáveis de cor */
+    :root {
+        --primary-color: #88A0B2; /* Azul acinzentado suave */
+        --secondary-color: #C3D9E8; /* Azul muito claro */
+        --accent-color: #5A7C93; /* Azul mais escuro para acentuação */
+        --text-color: #333333; /* Cinza escuro para texto */
+        --background-color: #F0F2F6; /* Cinza claro para fundo */
+        --card-background: #FFFFFF; /* Branco para cartões/elements */
+        --neutral-border: #E0E0E0; /* Cinza claro para bordas */
+        --shadow: 0 4px 8px rgba(0, 0, 0, 0.08); /* Sombra suave */
+        --border-radius: 8px; /* Raio da borda padrão */
+    }
+
+    /* Estilo geral da página */
+    body {
+        font-family: 'Segoe UI', sans-serif;
+        color: var(--text-color);
+        background-color: var(--background-color);
+    }
+
+    /* Sidebar */
+    .stSidebar {
+        background-color: var(--card-background);
+        padding-top: 20px;
+        box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    }
+    .stSidebar .stButton > button {
+        width: 100%;
+        margin-bottom: 10px;
+        background-color: var(--secondary-color);
+        color: var(--text-color);
+        border: none;
+        border-radius: var(--border-radius);
+        padding: 10px;
+        transition: all 0.2s ease;
+    }
+    .stSidebar .stButton > button:hover {
+        background-color: var(--primary-color);
+        color: white;
+    }
+    .stSidebar .stButton > button:active {
+        background-color: var(--accent-color);
+    }
+
+    /* Títulos */
+    h1, h2, h3, h4, h5, h6 {
+        color: var(--accent-color);
+        font-weight: 600;
+        margin-top: 0.8em;
+        margin-bottom: 0.5em;
+    }
+
+    /* Métricas */
+    [data-testid="stMetric"] {
+        background-color: var(--card-background);
+        border: 1px solid var(--neutral-border);
+        border-radius: var(--border-radius);
+        padding: 20px;
+        box-shadow: var(--shadow);
+        text-align: center;
+        margin-bottom: 20px;
+        transition: all 0.2s ease;
+    }
+    [data-testid="stMetric"]:hover {
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        transform: translateY(-2px);
+    }
+    [data-testid="stMetric"] > div > div:first-child { /* Label */
+        font-size: 1.1em;
+        color: var(--text-color);
+        font-weight: 500;
+    }
+    [data-testid="stMetric"] > div > div:nth-child(2) > div { /* Value */
+        font-size: 2em;
+        font-weight: 700;
+        color: var(--primary-color);
+        margin-top: 10px;
+    }
+
+    /* Expander */
+    .stExpander {
+        background-color: var(--card-background);
+        border: 1px solid var(--neutral-border);
+        border-radius: var(--border-radius);
+        padding: 15px;
+        margin-bottom: 15px;
+        box-shadow: var(--shadow);
+        transition: all 0.2s ease;
+    }
+    .stExpander > div > div > p { /* Título do expander */
+        font-weight: 600;
+        color: var(--primary-color);
+    }
+    .stExpander:hover {
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+    }
+
+    /* Dataframe */
+    .stDataFrame {
+        border-radius: var(--border-radius);
+        overflow: hidden; /* Garante que as bordas da tabela sejam arredondadas */
+        box-shadow: var(--shadow);
+        border: 1px solid var(--neutral-border);
+    }
+    /* Estilo para cabeçalhos de tabela */
+    .stDataFrame thead th {
+        background-color: var(--primary-color) !important;
+        color: white !important;
+        font-weight: 600 !important;
+    }
+
+    /* Linhas horizontais */
+    hr {
+        border-top: 1px solid var(--neutral-border);
+        margin-top: 30px;
+        margin-bottom: 30px;
+    }
+
+    /* Campos de input (text_input, number_input, date_input, selectbox) */
+    .stTextInput > label, .stNumberInput > label, .stDateInput > label, .stSelectbox > label, .stTimeInput > label {
+        font-weight: 500;
+        color: var(--text-color);
+    }
+    .stTextInput > div > input, .stNumberInput > div > input, .stDateInput > div > div > input, .stSelectbox > div > div, .stTimeInput > div > input {
+        border: 1px solid var(--neutral-border);
+        border-radius: var(--border-radius);
+        padding: 8px 12px;
+        color: var(--text-color);
+        background-color: var(--card-background);
+    }
+    .stTextInput > div > input:focus, .stNumberInput > div > input:focus, .stDateInput > div > div > input:focus, .stSelectbox > div > div:focus-within, .stTimeInput > div > input:focus {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 1px var(--primary-color);
+        outline: none;
+    }
+
+    /* Botões */
+    .stButton > button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: var(--border-radius);
+        padding: 10px 20px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+        margin-top: 10px; /* Adiciona margem acima dos botões */
+    }
+    .stButton > button:hover {
+        background-color: var(--accent-color);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+    .stButton > button:active {
+        background-color: var(--accent-color);
+        transform: translateY(0);
+        box-shadow: none;
+    }
+
+    /* Mensagens de sucesso/erro/aviso */
+    .stAlert {
+        border-radius: var(--border-radius);
+    }
+    .stAlert.success {
+        background-color: #e6ffe6; /* Verde claro */
+        color: #006600; /* Verde escuro */
+        border-left: 5px solid #00cc00;
+    }
+    .stAlert.error {
+        background-color: #ffe6e6; /* Vermelho claro */
+        color: #cc0000; /* Vermelho escuro */
+        border-left: 5px solid #ff0000;
+    }
+    .stAlert.info {
+        background-color: #e6f7ff; /* Azul claro */
+        color: #004d99; /* Azul escuro */
+        border-left: 5px solid #0099ff;
+    }
+    .stAlert.warning {
+        background-color: #fffbe6; /* Amarelo claro */
+        color: #996600; /* Amarelo escuro */
+        border-left: 5px solid #ffcc00;
+    }
+
+</style>
+""", unsafe_allow_html=True)
 
 
-# --- Funções de Banco de Dados e Helpers (Assumindo que estas estão definidas em outro lugar ou aqui) ---
-# SUBSTITUA ESTES PLACEHOLDERS PELAS SUAS FUNÇÕES REAIS DE INTERAÇÃO COM A BASE DE DADOS!
+# --- Configurações da Base de Dados ---
+# ********************************************************************************
+# *** MUITO IMPORTANTE: O NOME DO SEU SERVIDOR/INSTÂNCIA SQL SERVER ***
+# *** Conforme a sua captura de ecrã, é 'SusanaGonçalves\\SQLEXPRESS' ***
+# *** Se o seu computador não se chama 'SusanaGonçalves', ALTERE esta linha! ***
+# ********************************************************************************
+DB_SERVER = 'SusanaGonçalves\\SQLEXPRESS'
+DB_DATABASE = 'GestaoHoras'
+DB_DRIVER = '{ODBC Driver 17 for SQL Server}' # Certifique-se que tem este driver instalado
 
+# --- Funções de Conexão à Base de Dados ---
+@st.cache_resource
 def get_db_connection():
-    # Exemplo de lógica de conexão (substitua pela sua implementação real)
+    """
+    Estabelece e cacheia a conexão com a base de dados.
+    Esta função inclui mensagens de erro detalhadas para ajudar na depuração.
+    """
     try:
-        # Certifique-se de que você tem a biblioteca pyodbc instalada para SQL Server
-        import pyodbc
-        conn_str = (
-            f"DRIVER={st.secrets['connections.sql_server']['driver']};"
-            f"SERVER={st.secrets['connections.sql_server']['server']};"
-            f"DATABASE={st.secrets['connections.sql_server']['database']};"
-            f"UID={st.secrets['connections.sql_server']['uid']};"
-            f"PWD={st.secrets['connections.sql_server']['pwd']}"
+        conn = pyodbc.connect(
+            f'DRIVER={DB_DRIVER};'
+            f'SERVER={DB_SERVER};'
+            f'DATABASE={DB_DATABASE};'
+            f'Trusted_Connection=yes;' # Usa autenticação do Windows. O usuário que executa o script precisa de permissões no SQL Server.
         )
-        return pyodbc.connect(conn_str)
-    except KeyError as e:
-        st.error(f"Erro de configuração no secrets.toml: Chave '{e}' não encontrada para conexão ao DB. Verifique seu arquivo .streamlit/secrets.toml.")
-        return None
-    except Exception as e:
-        st.error(f"Erro ao conectar à base de dados: {e}. Verifique as suas credenciais e a conectividade.")
+        return conn
+    except pyodbc.Error as ex:
+        sqlstate = ex.args[0]
+        # Extrai o nome da instância para a mensagem de erro
+        instance_name = DB_SERVER.split('\\')[-1] if '\\' in DB_SERVER else DB_SERVER
+        st.error(f"Erro de Conexão à Base de Dados (SQLSTATE: {sqlstate}): {ex}")
+        st.info("Por favor, verifique os seguintes pontos para resolver o problema de conexão:")
+        st.info(f"• O serviço 'SQL Server ({instance_name})' está em execução no seu computador.")
+        st.info(f"• O '{DB_DRIVER}' está instalado no seu sistema (verifique se a versão 32/64 bits corresponde à sua instalação Python).")
+        st.info(f"• A firewall do Windows não está a bloquear a conexão (tente permitir o 'sqlservr.exe' ou a porta 1433 para TCP).")
+        st.info(f"• O utilizador atual do Windows (aquele que está a correr este script Streamlit) tem permissões para aceder à base de dados '{DB_DATABASE}'.")
+        st.info(f"• O nome do servidor '{DB_SERVER}' está **EXATO** (incluindo o nome do computador e da instância, se aplicável).")
         return None
 
-# Funções CRUD para Funcionários (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
-def get_funcionarios():
+# Função genérica para executar queries de escrita (INSERT, UPDATE, DELETE)
+def execute_query(query, params=None):
     conn = get_db_connection()
     if conn:
         try:
-            df = pd.read_sql_query("SELECT * FROM Funcionarios", conn)
+            cursor = conn.cursor()
+            cursor.execute(query, params if params else ())
+            conn.commit()
+            return True
+        except pyodbc.Error as ex:
+            st.error(f"Erro ao executar query: {ex}")
+            conn.rollback() # Reverte a transação em caso de erro
+            return False
+    return False
+
+# Função genérica para ler dados
+@st.cache_data(ttl=60) # Cache os dados por 60 segundos para melhorar a performance
+def fetch_data(query, params=None):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, params if params else ())
+            columns = [column[0] for column in cursor.description]
+            rows = cursor.fetchall()
+            df = pd.DataFrame.from_records(rows, columns=columns)
+
+            # Converter colunas que podem conter Decimal para float
+            for col in df.columns:
+                # Heurística: se a coluna for do tipo 'object' e tiver pelo menos um valor Decimal, converta.
+                # Ou se a coluna já tiver um tipo numérico mas não for float, tente converter para float.
+                if not df[col].empty:
+                    if isinstance(df[col].iloc[0], Decimal):
+                        df[col] = df[col].astype(float)
+                    elif pd.api.types.is_numeric_dtype(df[col]) and not pd.api.types.is_float_dtype(df[col]):
+                        try:
+                            df[col] = df[col].astype(float)
+                        except Exception:
+                            pass # Ignorar se não for possível converter (e.g., inteiros grandes)
+
             return df
-        except Exception as e:
-            st.error(f"Erro ao carregar funcionários: {e}")
-        finally:
-            conn.close()
+        except pyodbc.Error as ex:
+            st.error(f"Erro ao buscar dados: {ex}")
+            return pd.DataFrame() # Retorna um DataFrame vazio em caso de erro
     return pd.DataFrame()
+
+# --- Funções Específicas de CRUD para as Tabelas ---
+
+# Funcionários (ATUALIZADO: Adicionado Departamento e DiasFeriasAnuais)
+def get_funcionarios():
+    return fetch_data("SELECT FuncionarioID, NomeCompleto, NumeroFuncionario, DataNascimento, NIF, NISS, Telefone, Email, CategoriaProfissional, Departamento, SalarioBaseMensal, ValorSubsidioAlimentacaoDiario, TaxaIRS, TaxaSegurancaSocialFuncionario, HorasTrabalhoMensalPadrao, TaxaHoraExtra50, TaxaHoraExtra100, DiasFeriasAnuais FROM dbo.Funcionarios")
 
 def add_funcionario(data):
+    query = """
+    INSERT INTO dbo.Funcionarios (NomeCompleto, NumeroFuncionario, DataNascimento, NIF, NISS, Telefone, Email, CategoriaProfissional, Departamento,
+                                  SalarioBaseMensal, ValorSubsidioAlimentacaoDiario, TaxaIRS, TaxaSegurancaSocialFuncionario,
+                                  HorasTrabalhoMensalPadrao, TaxaHoraExtra50, TaxaHoraExtra100, DiasFeriasAnuais)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    params = (
+        data['NomeCompleto'], data['NumeroFuncionario'], data['DataNascimento'], data['NIF'], data['NISS'],
+        data['Telefone'], data['Email'], data['CategoriaProfissional'], data['Departamento'], data['SalarioBaseMensal'],
+        data['ValorSubsidioAlimentacaoDiario'], data['TaxaIRS'],
+        data['TaxaSegurancaSocialFuncionario'], data['HorasTrabalhoMensalPadrao'],
+        data['TaxaHoraExtra50'], data['TaxaHoraExtra100'], data['DiasFeriasAnuais']
+    )
+    return execute_query(query, params)
+
+def update_funcionario(funcionario_id, data):
+    query = """
+    UPDATE dbo.Funcionarios
+    SET NomeCompleto=?, NumeroFuncionario=?, DataNascimento=?, NIF=?, NISS=?, Telefone=?, Email=?, CategoriaProfissional=?, Departamento=?,
+        SalarioBaseMensal=?, ValorSubsidioAlimentacaoDiario=?, TaxaIRS=?, TaxaSegurancaSocialFuncionario=?,
+        HorasTrabalhoMensalPadrao=?, TaxaHoraExtra50=?, TaxaHoraExtra100=?, DiasFeriasAnuais=?
+    WHERE FuncionarioID=?
+    """
+    params = (
+        data['NomeCompleto'], data['NumeroFuncionario'], data['DataNascimento'], data['NIF'], data['NISS'],
+        data['Telefone'], data['Email'], data['CategoriaProfissional'], data['Departamento'], data['SalarioBaseMensal'],
+        data['ValorSubsidioAlimentacaoDiario'], data['TaxaIRS'],
+        data['TaxaSegurancaSocialFuncionario'], data['HorasTrabalhoMensalPadrao'],
+        data['TaxaHoraExtra50'], data['TaxaHoraExtra100'], data['DiasFeriasAnuais'], funcionario_id
+    )
+    return execute_query(query, params)
+
+def delete_funcionario(funcionario_id):
+    queries = [
+        "DELETE FROM dbo.RegistosDiarios WHERE FuncionarioID=?",
+        "DELETE FROM dbo.Ferias WHERE FuncionarioID=?",
+        "DELETE FROM dbo.Faltas WHERE FuncionarioID=?",
+        "DELETE FROM dbo.Licencas WHERE FuncionarioID=?",
+        "DELETE FROM dbo.AcertosSemestrais WHERE FuncionarioID=?",
+        "DELETE FROM dbo.Funcionarios WHERE FuncionarioID=?"
+    ]
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO Funcionarios ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
+            for query in queries:
+                cursor.execute(query, (funcionario_id,))
             conn.commit()
             return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar funcionário: {e}")
+        except pyodbc.Error as ex:
+            st.error(f"Erro ao apagar funcionário e dados relacionados: {ex}")
+            conn.rollback()
             return False
-        finally:
-            conn.close()
     return False
 
-def update_funcionario(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE Funcionarios SET {set_clause} WHERE FuncionarioID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar funcionário: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
-def delete_funcionario(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM Funcionarios WHERE FuncionarioID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar funcionário: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
-# Funções CRUD para Registos Diários (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Registos Diários
 def get_registos_diarios():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM RegistosDiarios", conn)
-            if 'DataRegisto' in df.columns:
-                df['DataRegisto'] = pd.to_datetime(df['DataRegisto']).dt.date
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar registos diários: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT * FROM dbo.RegistosDiarios")
 
 def add_registo_diario(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO RegistosDiarios ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar registo diário: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = """
+    INSERT INTO dbo.RegistosDiarios (FuncionarioID, DataRegisto, TipoOcorrenciaID, HorasTrabalhadas, HorasExtraDiarias, HorasAusencia, Observacoes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+    params = (
+        data['FuncionarioID'], data['DataRegisto'], data['TipoOcorrenciaID'],
+        data['HorasTrabalhadas'], data['HorasExtraDiarias'], data['HorasAusencia'], data['Observacoes']
+    )
+    return execute_query(query, params)
 
-def update_registo_diario(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE RegistosDiarios SET {set_clause} WHERE RegistoID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar registo diário: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_registo_diario(registo_id, data):
+    query = """
+    UPDATE dbo.RegistosDiarios
+    SET FuncionarioID=?, DataRegisto=?, TipoOcorrenciaID=?, HorasTrabalhadas=?, HorasExtraDiarias=?, HorasAusencia=?, Observacoes=?
+    WHERE RegistoID=?
+    """
+    params = (
+        data['FuncionarioID'], data['DataRegisto'], data['TipoOcorrenciaID'],
+        data['HorasTrabalhadas'], data['HorasExtraDiarias'], data['HorasAusencia'], data['Observacoes'], registo_id
+    )
+    return execute_query(query, params)
 
-def delete_registo_diario(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM RegistosDiarios WHERE RegistoID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar registo diário: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_registo_diario(registo_id):
+    query = "DELETE FROM dbo.RegistosDiarios WHERE RegistoID=?"
+    return execute_query(query, (registo_id,))
 
-# Funções CRUD para Férias (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Férias (ATUALIZADO: Com campo Aprovado)
 def get_ferias():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM Ferias", conn)
-            if 'DataInicio' in df.columns: df['DataInicio'] = pd.to_datetime(df['DataInicio']).dt.date
-            if 'DataFim' in df.columns: df['DataFim'] = pd.to_datetime(df['DataFim']).dt.date
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar férias: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT * FROM dbo.Ferias")
 
 def add_ferias(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO Ferias ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar férias: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = "INSERT INTO dbo.Ferias (FuncionarioID, DataInicio, DataFim, Observacoes, Aprovado) VALUES (?, ?, ?, ?, ?)"
+    params = (data['FuncionarioID'], data['DataInicio'], data['DataFim'], data['Observacoes'], data['Aprovado'])
+    return execute_query(query, params)
 
-def update_ferias(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE Ferias SET {set_clause} WHERE FeriasID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar férias: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_ferias(ferias_id, data):
+    query = "UPDATE dbo.Ferias SET FuncionarioID=?, DataInicio=?, DataFim=?, Observacoes=?, Aprovado=? WHERE FeriasID=?"
+    params = (data['FuncionarioID'], data['DataInicio'], data['DataFim'], data['Observacoes'], data['Aprovado'], ferias_id)
+    return execute_query(query, params)
 
-def delete_ferias(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM Ferias WHERE FeriasID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar férias: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_ferias(ferias_id):
+    query = "DELETE FROM dbo.Ferias WHERE FeriasID=?"
+    return execute_query(query, (ferias_id,))
 
-# Funções CRUD para Faltas (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Faltas (ATUALIZADO: Com campo Aprovado)
 def get_faltas():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM Faltas", conn)
-            if 'DataFalta' in df.columns: df['DataFalta'] = pd.to_datetime(df['DataFalta']).dt.date
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar faltas: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT * FROM dbo.Faltas")
 
 def add_falta(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO Faltas ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar falta: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = "INSERT INTO dbo.Faltas (FuncionarioID, DataFalta, Motivo, Justificada, HorasAusenciaFalta, Aprovado) VALUES (?, ?, ?, ?, ?, ?)"
+    params = (data['FuncionarioID'], data['DataFalta'], data['Motivo'], data['Justificada'], data['HorasAusenciaFalta'], data['Aprovado'])
+    return execute_query(query, params)
 
-def update_falta(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE Faltas SET {set_clause} WHERE FaltaID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar falta: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_falta(falta_id, data):
+    query = "UPDATE dbo.Faltas SET FuncionarioID=?, DataFalta=?, Motivo=?, Justificada=?, HorasAusenciaFalta=?, Aprovado=? WHERE FaltaID=?"
+    params = (data['FuncionarioID'], data['DataFalta'], data['Motivo'], data['Justificada'], data['HorasAusenciaFalta'], data['Aprovado'], falta_id)
+    return execute_query(query, params)
 
-def delete_falta(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM Faltas WHERE FaltaID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar falta: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_falta(falta_id):
+    query = "DELETE FROM dbo.Faltas WHERE FaltaID=?"
+    return execute_query(query, (falta_id,))
 
-# Funções CRUD para Licenças (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Licenças (ATUALIZADO: Com campo Aprovado)
 def get_licencas():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM Licencas", conn)
-            if 'DataInicio' in df.columns: df['DataInicio'] = pd.to_datetime(df['DataInicio']).dt.date
-            if 'DataFim' in df.columns: df['DataFim'] = pd.to_datetime(df['DataFim']).dt.date
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar licenças: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT * FROM dbo.Licencas")
 
 def add_licenca(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO Licencas ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar licença: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = "INSERT INTO dbo.Licencas (FuncionarioID, DataInicio, DataFim, Motivo, Observacoes, Aprovado) VALUES (?, ?, ?, ?, ?, ?)"
+    params = (data['FuncionarioID'], data['DataInicio'], data['DataFim'], data['Motivo'], data['Observacoes'], data['Aprovado'])
+    return execute_query(query, params)
 
-def update_licenca(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE Licencas SET {set_clause} WHERE LicencaID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar licença: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_licenca(licenca_id, data):
+    query = "UPDATE dbo.Licencas SET FuncionarioID=?, DataInicio=?, DataFim=?, Motivo=?, Observacoes=?, Aprovado=? WHERE LicencaID=?"
+    params = (data['FuncionarioID'], data['DataInicio'], data['DataFim'], data['Motivo'], data['Observacoes'], data['Aprovado'], licenca_id)
+    return execute_query(query, params)
 
-def delete_licenca(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM Licencas WHERE LicencaID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar licença: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_licenca(licenca_id):
+    query = "DELETE FROM dbo.Licencas WHERE LicencaID=?"
+    return execute_query(query, (licenca_id,))
 
-# Funções CRUD para Tipos de Ocorrência (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Tipos de Ocorrência (NOVO CRUD)
 def get_tipos_ocorrencia():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM TiposOcorrencia", conn)
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar tipos de ocorrência: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT TipoID, Codigo, Descricao, HorasPadrao, EhTurno, EhHorasExtra, EhAusencia, EhFOTS, EhFolgaCompensatoria, Sigla FROM dbo.TiposOcorrencia")
 
 def add_tipo_ocorrencia(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO TiposOcorrencia ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar tipo de ocorrência: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = """
+    INSERT INTO dbo.TiposOcorrencia (Codigo, Descricao, HorasPadrao, EhTurno, EhHorasExtra, EhAusencia, EhFOTS, EhFolgaCompensatoria, Sigla)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    params = (data['Codigo'], data['Descricao'], data['HorasPadrao'], data['EhTurno'], data['EhHorasExtra'],
+              data['EhAusencia'], data['EhFOTS'], data['EhFolga Compensatoria'], data['Sigla'])
+    return execute_query(query, params)
 
-def update_tipo_ocorrencia(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE TiposOcorrencia SET {set_clause} WHERE TipoOcorrenciaID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar tipo de ocorrência: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_tipo_ocorrencia(tipo_id, data):
+    query = """
+    UPDATE dbo.TiposOcorrencia
+    SET Codigo=?, Descricao=?, HorasPadrao=?, EhTurno=?, EhHorasExtra=?, EhAusencia=?, EhFOTS=?, EhFolga Compensatoria=?, Sigla=?
+    WHERE TipoID=?
+    """
+    params = (data['Codigo'], data['Descricao'], data['HorasPadrao'], data['EhTurno'], data['EhHorasExtra'],
+              data['EhAusencia'], data['EhFOTS'], data['EhFolgaCompensatoria'], data['Sigla'], tipo_id)
+    return execute_query(query, params)
 
-def delete_tipo_ocorrencia(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM TiposOcorrencia WHERE TipoOcorrenciaID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar tipo de ocorrência: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_tipo_ocorrencia(tipo_id):
+    query = "DELETE FROM dbo.TiposOcorrencia WHERE TipoID=?"
+    return execute_query(query, (tipo_id,))
 
-def get_sigla_by_tipo_id(tipo_id, tipos_ocorrencia_df):
-    if not tipos_ocorrencia_df.empty and tipo_id in tipos_ocorrencia_df['TipoOcorrenciaID'].values:
-        return tipos_ocorrencia_df[tipos_ocorrencia_df['TipoOcorrenciaID'] == tipo_id]['Sigla'].iloc[0]
-    return '?' # Sigla padrão se não encontrar
 
-# Funções CRUD para Acertos Semestrais (exemplos - **VOCÊ PRECISA DA SUA IMPLEMENTAÇÃO REAL**)
+# Função auxiliar para obter a sigla do tipo de ocorrência
+def get_sigla_by_tipo_id(tipo_id, tipos_ocorrencia_df_global):
+    """Retorna a sigla de um TipoOcorrenciaID usando o DataFrame global."""
+    # Corrigido para usar 'TipoOcorrenciaID' que é o nome da coluna após o rename
+    if not tipos_ocorrencia_df_global.empty and 'TipoOcorrenciaID' in tipos_ocorrencia_df_global.columns and tipo_id in tipos_ocorrencia_df_global['TipoOcorrenciaID'].values:
+        return tipos_ocorrencia_df_global[tipos_ocorrencia_df_global['TipoOcorrenciaID'] == tipo_id]['Sigla'].iloc[0]
+    return '-' # Sigla padrão para não encontrado ou sem ocorrência
+
+
+# Acertos Semestrais
 def get_acertos_semestrais():
-    conn = get_db_connection()
-    if conn:
-        try:
-            df = pd.read_sql_query("SELECT * FROM AcertosSemestrais", conn)
-            return df
-        except Exception as e:
-            st.error(f"Erro ao carregar acertos semestrais: {e}")
-        finally:
-            conn.close()
-    return pd.DataFrame()
+    return fetch_data("SELECT * FROM dbo.AcertosSemestrais")
 
 def add_acerto_semestral(data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            columns = ', '.join(data.keys())
-            placeholders = ', '.join(['?'] * len(data))
-            query = f"INSERT INTO AcertosSemestrais ({columns}) VALUES ({placeholders})"
-            cursor.execute(query, tuple(data.values()))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao adicionar acerto semestral: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+    query = """
+    INSERT INTO dbo.AcertosSemestrais (FuncionarioID, Ano, Semestre, TotalHorasNormais,
+                                       TotalHorasExtraAcumuladas, TotalFOTSDisponiveis)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """
+    params = (
+        data['FuncionarioID'], data['Ano'], data['Semestre'], data['TotalHorasNormais'],
+        data['TotalHorasExtraAcumuladas'], data['TotalFOTSDisponiveis']
+    )
+    return execute_query(query, params)
 
-def update_acerto_semestral(id, data):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            set_clause = ', '.join([f"{key} = ?" for key in data.keys()])
-            query = f"UPDATE AcertosSemestrais SET {set_clause} WHERE AcertoID = ?"
-            values = tuple(data.values()) + (id,)
-            cursor.execute(query, values)
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao atualizar acerto semestral: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def update_acerto_semestral(acerto_id, data):
+    query = """
+    UPDATE dbo.AcertosSemestrais
+    SET FuncionarioID=?, Ano=?, Semestre=?, TotalHorasNormais=?,
+        TotalHorasExtraAcumuladas=?, TotalFOTSDisponiveis=?
+    WHERE AcertoID=?
+    """
+    params = (
+        data['FuncionarioID'], data['Ano'], data['Semestre'], data['TotalHorasNormais'],
+        data['TotalHorasExtraAcumuladas'], data['TotalFOTSDisponiveis'], acerto_id
+    )
+    return execute_query(query, params)
 
-def delete_acerto_semestral(id):
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM AcertosSemestrais WHERE AcertoID = ?", (id,))
-            conn.commit()
-            return True
-        except Exception as e:
-            st.error(f"Erro ao apagar acerto semestral: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
+def delete_acerto_semestral(acerto_id):
+    query = "DELETE FROM dbo.AcertosSemestrais WHERE AcertoID=?"
+    return execute_query(query, (acerto_id,))
 
 
-# Função para buscar todos os eventos para um funcionário e período
+# Função para obter todos os eventos (registos diários, faltas, férias, licenças) para um funcionário num período
 def get_all_events_for_employee_and_period(funcionario_id, start_date, end_date):
-    registos_diarios_df = get_registos_diarios()
-    faltas_df = get_faltas()
-    ferias_df = get_ferias()
-    licencas_df = get_licencas()
+    registos_diarios_df = fetch_data(
+        "SELECT * FROM dbo.RegistosDiarios WHERE FuncionarioID = ? AND DataRegisto BETWEEN ? AND ?",
+        (funcionario_id, start_date, end_date)
+    )
+    faltas_df = fetch_data(
+        "SELECT * FROM dbo.Faltas WHERE FuncionarioID = ? AND DataFalta BETWEEN ? AND ?",
+        (funcionario_id, start_date, end_date)
+    )
+    ferias_df = fetch_data(
+        "SELECT * FROM dbo.Ferias WHERE FuncionarioID = ? AND DataInicio <= ? AND DataFim >= ?",
+        (funcionario_id, end_date, start_date)
+    )
+    licencas_df = fetch_data(
+        "SELECT * FROM dbo.Licencas WHERE FuncionarioID = ? AND DataInicio <= ? AND DataFim >= ?",
+        (funcionario_id, end_date, start_date)
+    )
+    return registos_diarios_df, faltas_df, ferias_df, licencas_df
 
-    registos_diarios_mes = registos_diarios_df[
-        (registos_diarios_df['FuncionarioID'] == funcionario_id) &
-        (pd.to_datetime(registos_diarios_df['DataRegisto']).dt.date >= start_date) &
-        (pd.to_datetime(registos_diarios_df['DataRegisto']).dt.date <= end_date)
-    ]
-    faltas_mes = faltas_df[
-        (faltas_df['FuncionarioID'] == funcionario_id) &
-        (pd.to_datetime(faltas_df['DataFalta']).dt.date >= start_date) &
-        (pd.to_datetime(faltas_df['DataFalta']).dt.date <= end_date)
-    ]
-    ferias_mes = ferias_df[
-        (ferias_df['FuncionarioID'] == funcionario_id) &
-        (pd.to_datetime(ferias_df['DataInicio']).dt.date <= end_date) &
-        (pd.to_datetime(ferias_df['DataFim']).dt.date >= start_date) &
-        (ferias_df['Aprovado'] == True)
-    ]
-    licencas_mes = licencas_df[
-        (licencas_df['FuncionarioID'] == funcionario_id) &
-        (pd.to_datetime(licencas_df['DataInicio']).dt.date <= end_date) &
-        (pd.to_datetime(licencas_df['DataFim']).dt.date >= start_date) &
-        (licencas_df['Aprovado'] == True)
-    ]
-    return registos_diarios_mes, faltas_mes, ferias_mes, licencas_mes
+# Função para exportar DataFrame para CSV
+def convert_df_to_csv(df):
+    return df.to_csv(index=False).encode('utf-8')
 
-# Função para gerar PDF (Exemplo, você precisa da implementação real do ReportLab)
+# Função para exportar DataFrame para Excel (usando BytesIO)
+def to_excel(df):
+    output = BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Sheet1')
+    writer.close() # Use writer.close() instead of writer.save() for newer pandas/xlsxwriter
+    processed_data = output.getvalue()
+    return processed_data
+
+# --- Função para Gerar PDF do Recibo de Vencimento (Layout Sofisticado e Otimizado) ---
 def generate_payslip_pdf(funcionario_info, mes_recibo, ano_recibo,
                           total_horas_trabalhadas_mes, total_horas_extra_mes,
                           salario_base_mensal, valor_horas_extra,
@@ -533,270 +554,472 @@ def generate_payslip_pdf(funcionario_info, mes_recibo, ano_recibo,
                           desconto_irs, taxa_irs, desconto_ss, taxa_seguranca_social_funcionario,
                           total_horas_ausencia_geral, desconto_ausencia, salario_liquido,
                           dias_ferias_mes, dias_licencas_mes):
-    st.error("Placeholder: generate_payslip_pdf precisa ser implementada com ReportLab!")
-    # Retorna um objeto BytesIO vazio para evitar erro, na implementação real seria o PDF
-    return io.BytesIO(b"PDF Content Placeholder")
 
-# Funções de conversão para download
-@st.cache_data
-def convert_df_to_csv(df):
-    return df.to_csv(index=False).encode('utf-8')
+    buffer = BytesIO()
+    # Margens menores para maximizar o espaço na página
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=1.0*cm, leftMargin=1.0*cm, topMargin=1.0*cm, bottomMargin=1.0*cm) # Margens ainda menores
+    styles = getSampleStyleSheet()
 
-@st.cache_data
-def to_excel(df):
-    output = io.BytesIO()
-    writer = pd.ExcelWriter(output, engine='xlsxwriter')
-    df.to_excel(writer, index=False, sheet_name='Sheet1')
-    writer.close()
-    processed_data = output.getvalue()
-    return processed_data
+    # --- Estilos Aprimorados para um Layout Mais Sofisticado e Otimizado ---
+    # Tamanhos de fonte e espaçamentos ajustados para caber numa página
+    styles.add(ParagraphStyle(name='HeaderTitle', fontSize=20, leading=24, alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.HexColor('#5A7C93'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='HeaderSubtitle', fontSize=11, leading=13, alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.HexColor('#88A0B2'), spaceAfter=0.3*cm)) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='CompanyInfo', fontSize=6, leading=8, alignment=TA_CENTER, fontName='Helvetica', textColor=colors.HexColor('#666666'))) # Tamanho reduzido
+
+    styles.add(ParagraphStyle(name='SectionHeading', fontSize=10, leading=13, alignment=TA_LEFT, fontName='Helvetica-Bold', textColor=colors.HexColor('#5A7C93'), spaceBefore=0.6*cm, spaceAfter=0.2*cm)) # Tamanho e espaço reduzidos
+    styles.add(ParagraphStyle(name='EmployeeDetail', fontSize=7, leading=9, alignment=TA_LEFT, fontName='Helvetica', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='EmployeeDetailBold', fontSize=7, leading=9, alignment=TA_LEFT, fontName='Helvetica-Bold', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+
+    styles.add(ParagraphStyle(name='TableCaption', fontSize=8, leading=10, alignment=TA_LEFT, fontName='Helvetica-Bold', textColor=colors.HexColor('#5A7C93'), spaceBefore=0.3*cm, spaceAfter=0.1*cm)) # Tamanho e espaço reduzidos
+    styles.add(ParagraphStyle(name='TableColHeader', fontSize=8, leading=10, alignment=TA_CENTER, fontName='Helvetica-Bold', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='TableTextLeft', fontSize=7, leading=9, alignment=TA_LEFT, fontName='Helvetica', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='TableTextRight', fontSize=7, leading=9, alignment=TA_RIGHT, fontName='Helvetica', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='TableTotalText', fontSize=8, leading=10, alignment=TA_RIGHT, fontName='Helvetica-Bold', textColor=colors.HexColor('#5A7C93'))) # Tamanho reduzido
+    styles.add(ParagraphStyle(name='TableTotalValue', fontSize=8, leading=10, alignment=TA_RIGHT, fontName='Helvetica-Bold', textColor=colors.HexColor('#333333'))) # Tamanho reduzido
+
+    styles.add(ParagraphStyle(name='FinalTotalLabel', fontSize=13, leading=15, alignment=TA_RIGHT, fontName='Helvetica-Bold', textColor=colors.HexColor('#5A7C93'), spaceBefore=0.6*cm)) # Tamanho e espaço reduzidos
+    styles.add(ParagraphStyle(name='FinalTotalValue', fontSize=15, leading=17, alignment=TA_RIGHT, fontName='Helvetica-Bold', textColor=colors.HexColor('#006600'))) # Tamanho reduzido
+
+    styles.add(ParagraphStyle(name='FooterText', fontSize=5, leading=7, alignment=TA_CENTER, fontName='Helvetica', textColor=colors.HexColor('#888888'), spaceBefore=0.7*cm)) # Tamanho e espaço reduzidos
+
+    story = []
+
+    # --- Cabeçalho da Empresa (Fictício e Otimizado) ---
+    story.append(Paragraph("NOME DA EMPRESA", styles['HeaderTitle']))
+    story.append(Paragraph("Rua Fictícia, 123, 4700-000 Braga - Portugal", styles['CompanyInfo']))
+    story.append(Paragraph("NIF: 987654321", styles['CompanyInfo'])) # NIF fictício
+    story.append(Spacer(1, 0.2*cm)) # Espaço reduzido
+    story.append(Paragraph(f"RECIBO DE VENCIMENTO - {calendar.month_name[mes_recibo].upper()} / {ano_recibo}", styles['HeaderSubtitle']))
+    story.append(Spacer(1, 0.4*cm)) # Espaço reduzido
+
+    # --- Informações do Funcionário ---
+    story.append(Paragraph("Informações do Funcionário:", styles['SectionHeading']))
+    employee_data = [
+        [Paragraph("Nome:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['NomeCompleto'], styles['EmployeeDetail']),
+         Paragraph("Categoria:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['CategoriaProfissional'], styles['EmployeeDetail'])],
+        [Paragraph("Nº Funcionário:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['NumeroFuncionario'], styles['EmployeeDetail']),
+         Paragraph("Salário Base:", styles['EmployeeDetailBold']), Paragraph(f"{salario_base_mensal:.2f} €", styles['EmployeeDetail'])],
+        [Paragraph("NIF:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['NIF'], styles['EmployeeDetail']),
+         Paragraph("IRS (%):", styles['EmployeeDetailBold']), Paragraph(f"{taxa_irs*100:.2f} %", styles['EmployeeDetail'])],
+        [Paragraph("NISS:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['NISS'], styles['EmployeeDetail']),
+         Paragraph("Seg. Social (%):", styles['EmployeeDetailBold']), Paragraph(f"{taxa_seguranca_social_funcionario*100:.2f} %", styles['EmployeeDetail'])],
+        [Paragraph("Departamento:", styles['EmployeeDetailBold']), Paragraph(funcionario_info['Departamento'] if funcionario_info['Departamento'] else 'N/A', styles['EmployeeDetail']),
+         Paragraph("", styles['EmployeeDetailBold']), Paragraph("", styles['EmployeeDetail'])], # Espaço vazio para alinhar
+    ]
+    employee_table = Table(employee_data, colWidths=[3.5*cm, 6.5*cm, 3.5*cm, 5.5*cm])
+    employee_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('GRID', (0,0), (-1,-1), 0.25, colors.HexColor('#E0E0E0')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#C3D9E8')),
+    ]))
+    story.append(employee_table)
+    story.append(Spacer(1, 0.4*cm)) # Espaço reduzido
+
+    # --- Tabela de Rendimentos ---
+    story.append(Paragraph("Rendimentos:", styles['SectionHeading']))
+    data_rendimentos = [
+        [Paragraph("Descrição", styles['TableColHeader']), Paragraph("Valor (€)", styles['TableColHeader'])]
+    ]
+    data_rendimentos.append([Paragraph("Salário Base Mensal", styles['TableTextLeft']), Paragraph(f"{salario_base_mensal:.2f}", styles['TableTextRight'])])
+    if valor_horas_extra > 0:
+        data_rendimentos.append([Paragraph(f"Horas Extra ({total_horas_extra_mes:.2f}h)", styles['TableTextLeft']), Paragraph(f"{valor_horas_extra:.2f}", styles['TableTextRight'])])
+    data_rendimentos.append([Paragraph("Subsídio de Alimentação", styles['TableTextLeft']), Paragraph(f"{subsidio_alimentacao:.2f}", styles['TableTextRight'])])
+    
+    # Linha final de Vencimento Bruto
+    data_rendimentos.append([
+        Paragraph("<b>Vencimento Bruto</b>", styles['TableTotalText']),
+        Paragraph(f"<b>{vencimento_bruto + subsidio_alimentacao:.2f}</b>", styles['TableTotalValue'])
+    ])
+
+    table_rendimentos = Table(data_rendimentos, colWidths=[13*cm, 5*cm])
+    table_rendimentos.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#C3D9E8')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#333333')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('ALIGN', (1,1), (-1,-1), 'RIGHT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 3), # Reduzir padding
+        ('TOPPADDING', (0,0), (-1,0), 3),    # Reduzir padding
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E0E0E0')),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#E0E0E0')),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#E0E0E0')),
+        ('LEFTPADDING', (0,0), (-1,-1), 2),  # Reduzir padding
+        ('RIGHTPADDING', (0,0), (-1,-1), 2), # Reduzir padding
+    ]))
+    story.append(table_rendimentos)
+    story.append(Spacer(1, 0.4*cm)) # Espaço reduzido
+
+    # --- Tabela de Descontos ---
+    story.append(Paragraph("Descontos:", styles['SectionHeading']))
+    data_descontos = [
+        [Paragraph("Descrição", styles['TableColHeader']), Paragraph("Valor (€)", styles['TableColHeader'])]
+    ]
+    data_descontos.append([Paragraph(f"IRS ({taxa_irs*100:.2f}%)", styles['TableTextLeft']), Paragraph(f"{desconto_irs:.2f}", styles['TableTextRight'])])
+    data_descontos.append([Paragraph(f"Segurança Social ({taxa_seguranca_social_funcionario*100:.2f}%)", styles['TableTextLeft']), Paragraph(f"{desconto_ss:.2f}", styles['TableTextRight'])])
+    if total_horas_ausencia_geral > 0:
+        data_descontos.append([Paragraph(f"Ausências ({total_horas_ausencia_geral:.2f}h)", styles['TableTextLeft']), Paragraph(f"{desconto_ausencia:.2f}", styles['TableTextRight'])])
+    
+    # Linha final de Total Descontos
+    data_descontos.append([
+        Paragraph("<b>Total Descontos</b>", styles['TableTotalText']),
+        Paragraph(f"<b>{(desconto_irs + desconto_ss + desconto_ausencia):.2f}</b>", styles['TableTotalValue'])
+    ])
+
+    table_descontos = Table(data_descontos, colWidths=[13*cm, 5*cm])
+    table_descontos.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#C3D9E8')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#333333')),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('ALIGN', (1,1), (-1,-1), 'RIGHT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 3), # Reduzir padding
+        ('TOPPADDING', (0,0), (-1,0), 3),    # Reduzir padding
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#E0E0E0')),
+        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#E0E0E0')),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#E0E0E0')),
+        ('LEFTPADDING', (0,0), (-1,-1), 2),  # Reduzir padding
+        ('RIGHTPADDING', (0,0), (-1,-1), 2), # Reduzir padding
+    ]))
+    story.append(table_descontos)
+    story.append(Spacer(1, 0.6*cm)) # Espaço reduzido
+
+    # --- Salário Líquido Final ---
+    story.append(Paragraph(f"Salário Líquido a Receber:", styles['FinalTotalLabel']))
+    story.append(Paragraph(f"{salario_liquido:.2f} €", styles['FinalTotalValue']))
+    story.append(Spacer(1, 0.6*cm)) # Espaço reduzido
+
+    # --- Resumo de Férias e Licenças ---
+    story.append(Paragraph("Resumo de Férias e Licenças no Mês:", styles['SectionHeading']))
+    summary_data = [
+        [Paragraph("Dias de Férias:", styles['EmployeeDetailBold']), Paragraph(f"{dias_ferias_mes} dias", styles['EmployeeDetail'])],
+        [Paragraph("Dias de Licença:", styles['EmployeeDetailBold']), Paragraph(f"{dias_licencas_mes} dias", styles['EmployeeDetail'])],
+    ]
+    summary_table = Table(summary_data, colWidths=[5*cm, 13*cm])
+    summary_table.setStyle(TableStyle([
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
+        ('TOPPADDING', (0,0), (-1,-1), 0),
+        ('GRID', (0,0), (-1,-1), 0.25, colors.HexColor('#E0E0E0')),
+        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor('#C3D9E8')),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 0.8*cm)) # Espaço reduzido
+
+    # --- Rodapé ---
+    story.append(Paragraph("Documento gerado pelo Sistema de Gestão de Horas", styles['FooterText']))
+    story.append(Paragraph(f"Impresso em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", styles['FooterText']))
+    
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
-# --- Configuração da Página Streamlit ---
-st.set_page_config(layout="wide", page_title="Gestão de RH e Assiduidade")
+# --- Lógica da Aplicação Streamlit ---
 
-# --- Carregar Dados Iniciais (com tratamento de erro) ---
-# Tenta carregar dados; se falhar, retorna DataFrame vazio
+# Inicialização do estado da sessão para controlar a aba ativa
+if 'active_tab_index' not in st.session_state:
+    st.session_state.active_tab_index = 0 # 0 = Dashboard
+
+# Carregar dados iniciais (se a conexão for bem-sucedida)
+# Estas variáveis são definidas no início para serem usadas em todas as abas sem 'NameError'
 funcionarios_df = get_funcionarios()
 registos_diarios_df = get_registos_diarios()
 ferias_df = get_ferias()
 faltas_df = get_faltas()
 licencas_df = get_licencas()
-tipos_ocorrencia_df = get_tipos_ocorrencia()
+tipos_ocorrencia_df = get_tipos_ocorrencia() # Usado para mapear IDs para nomes
 acertos_semestrais_df = get_acertos_semestrais()
 
-# Gerar listas para selectbox e maps
-funcionario_nomes = ['Selecione um Funcionário']
-funcionario_id_map = {}
-if not funcionarios_df.empty:
-    funcionario_nomes.extend(funcionarios_df['NomeCompleto'].tolist())
-    funcionario_id_map = pd.Series(funcionarios_df.FuncionarioID.values, index=funcionarios_df.NomeCompleto).to_dict()
-
-departamentos_unicos = ['Todos']
-if not funcionarios_df.empty:
-    departamentos_unicos.extend(funcionarios_df['Departamento'].dropna().unique().tolist())
+# ATUALIZADO: Renomear a coluna 'TipoID' para 'TipoOcorrenciaID' no DataFrame
+if not tipos_ocorrencia_df.empty and 'TipoID' in tipos_ocorrencia_df.columns:
+    tipos_ocorrencia_df = tipos_ocorrencia_df.rename(columns={'TipoID': 'TipoOcorrenciaID'})
 
 
-# --- Sidebar para Navegação ---
-st.sidebar.title("Navegação")
-tabs = ["Dashboard", "Gestão de Funcionários", "Registos de Presença", "Gerar Recibo de Vencimento", "Acertos Semestrais", "Relatórios e Análises", "Configurações"]
-selected_tab = st.sidebar.radio("Ir para", tabs, index=st.session_state.active_tab_index, key="main_navigation")
+# Mapeamentos para uso em selects (definidos uma vez após carregar dados)
+funcionario_nomes = funcionarios_df['NomeCompleto'].tolist() if not funcionarios_df.empty else []
+funcionario_id_map = dict(zip(funcionarios_df['NomeCompleto'], funcionarios_df['FuncionarioID'])) if not funcionarios_df.empty else {}
+# Incluir 'N/A' como opção para departamentos que ainda não foram definidos
+departamentos_unicos = ['Todos'] + sorted(funcionarios_df['Departamento'].dropna().unique().tolist()) if not funcionarios_df.empty else ['Todos']
 
-# Atualiza o índice da aba na sessão (isso deve vir depois do radio, globalmente)
-st.session_state.active_tab_index = tabs.index(selected_tab)
+tipo_ocorrencia_nomes = tipos_ocorrencia_df['Descricao'].tolist() if not tipos_ocorrencia_df.empty else []
+tipo_ocorrencia_id_map = dict(zip(tipos_ocorrencia_df['Descricao'], tipos_ocorrencia_df['TipoOcorrenciaID'])) if not tipos_ocorrencia_df.empty else {}
+tipo_ocorrencia_sigla_map = dict(zip(tipos_ocorrencia_df['Descricao'], tipos_ocorrencia_df['Sigla'])) if not tipos_ocorrencia_df.empty else {}
 
-# --- Conteúdo Principal ---
+
+# --- Verifica se a conexão à DB falhou e impede o resto do app de carregar ---
+if funcionarios_df.empty and get_db_connection() is None:
+    st.stop() # Parar a execução se a conexão falhar e não houver dados
+
+
+# Sidebar para navegação
+st.sidebar.title("Sistema de Gestão de Horas")
+st.sidebar.markdown("---")
+
+if st.sidebar.button("📊 Dashboard", key="nav_dashboard"):
+    st.session_state.active_tab_index = 0
+if st.sidebar.button("👥 Gestão de Funcionários", key="nav_funcionarios"):
+    st.session_state.active_tab_index = 1
+if st.sidebar.button("📝 Registos de Presença", key="nav_registos"):
+    st.session_state.active_tab_index = 2
+if st.sidebar.button("💰 Gerar Recibo de Vencimento", key="nav_recibo"):
+    st.session_state.active_tab_index = 3
+if st.sidebar.button("📈 Acertos Semestrais", key="nav_acertos"):
+    st.session_state.active_tab_index = 4
+if st.sidebar.button("📋 Relatórios e Análises", key="nav_relatorios_analises"): # Nome da aba atualizado
+    st.session_state.active_tab_index = 5
+if st.sidebar.button("🛠️ Testar DB", key="nav_test_db"):
+    st.session_state.active_tab_index = 6
+
+
+st.sidebar.markdown("---")
+st.sidebar.info("Desenvolvido por Susana Gonçalves")
+
+# --- Conteúdo das Abas ---
 
 # Aba: Dashboard
 if st.session_state.active_tab_index == 0:
-    st.title("📊 Dashboard")
-    st.write("Bem-vindo ao sistema de Gestão de RH e Assiduidade!")
+    st.title("📊 Dashboard Geral")
+    st.write("Visão geral da gestão de funcionários e registos de horas.")
 
-    st.markdown("---")
-    st.subheader("Resumo Geral")
-
+    # Cartões de métricas
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total de Funcionários", funcionarios_df.shape[0] if not funcionarios_df.empty else 0)
 
-    funcionarios_com_registos = registos_diarios_df['FuncionarioID'].nunique() if not registos_diarios_df.empty else 0
-    col2.metric("Funcionários com Registos (Este Mês)", funcionarios_com_registos)
+    num_funcionarios = len(funcionarios_df) if not funcionarios_df.empty else 0
+    col1.metric("Total de Funcionários", num_funcionarios)
 
-    ferias_pendentes = ferias_df[(ferias_df['Aprovado'] == False)].shape[0] if not ferias_df.empty else 0
-    col3.metric("Férias Pendentes de Aprovação", ferias_pendentes)
+    # Exemplo: Total de horas trabalhadas no mês atual (agora usando HorasTrabalhadas e HorasExtraDiarias da DB)
+    if not registos_diarios_df.empty:
+        mes_atual = datetime.now().month
+        ano_atual = datetime.now().year
+        registos_mes_atual = registos_diarios_df[
+            (pd.to_datetime(registos_diarios_df['DataRegisto']).dt.month == mes_atual) &
+            (pd.to_datetime(registos_diarios_df['DataRegisto']).dt.year == ano_atual)
+        ].copy() # Usar .copy() para evitar SettingWithCopyWarning
+
+        total_horas_trabalhadas = registos_mes_atual['HorasTrabalhadas'].sum()
+        total_horas_extra = registos_mes_atual['HorasExtraDiarias'].sum()
+    else:
+        total_horas_trabalhadas = 0
+        total_horas_extra = 0
+
+    col2.metric("Horas Trabalhadas (mês atual)", f"{total_horas_trabalhadas:.2f}h")
+    col3.metric("Horas Extra (mês atual)", f"{total_horas_extra:.2f}h")
 
     st.markdown("---")
-    st.subheader("Atividade Recente (Últimos 7 dias)")
-    end_date_recent = date.today()
-    start_date_recent = end_date_recent - pd.Timedelta(days=7).date()
 
-    recent_registos = registos_diarios_df[
-        (registos_diarios_df['DataRegisto'] >= start_date_recent) &
-        (registos_diarios_df['DataRegisto'] <= end_date_recent)
-    ]
-    if not recent_registos.empty:
-        st.write(f"**Registos Diários de {start_date_recent} a {end_date_recent}:**")
-        st.dataframe(recent_registos[['DataRegisto', 'FuncionarioID', 'HorasTrabalhadas', 'HorasExtraDiarias', 'Observacoes']], use_container_width=True)
+    st.subheader("Últimos Registos de Presença")
+    if not registos_diarios_df.empty:
+        # Combinar com nomes de funcionários para melhor visualização
+        registos_com_nomes = pd.merge(registos_diarios_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']],
+                                      on='FuncionarioID', how='left')
+        # Mapear TipoOcorrenciaID para Descricao
+        registos_com_nomes = pd.merge(registos_com_nomes, tipos_ocorrencia_df[['TipoOcorrenciaID', 'Descricao']], # Corrigido para 'TipoOcorrenciaID'
+                                      left_on='TipoOcorrenciaID', right_on='TipoOcorrenciaID', how='left') # Corrigido para 'TipoOcorrenciaID'
+        registos_com_nomes = registos_com_nomes.rename(columns={'Descricao': 'Tipo de Ocorrência'})
+        # Mostra as colunas que realmente existem no DB
+        st.dataframe(registos_com_nomes[['NomeCompleto', 'DataRegisto', 'HorasTrabalhadas', 'HorasExtraDiarias', 'HorasAusencia', 'Tipo de Ocorrência', 'Observacoes']]
+                     .tail(10).sort_values(by='DataRegisto', ascending=False), use_container_width=True)
     else:
-        st.info("Nenhum registo diário nos últimos 7 dias.")
+        st.info("Nenhum registo de presença encontrado.")
 
-    recent_faltas = faltas_df[
-        (faltas_df['DataFalta'] >= start_date_recent) &
-        (faltas_df['DataFalta'] <= end_date_recent)
-    ]
-    if not recent_faltas.empty:
-        st.write(f"**Faltas de {start_date_recent} a {end_date_recent}:**")
-        st.dataframe(recent_faltas[['DataFalta', 'FuncionarioID', 'Motivo', 'Justificada', 'Aprovado']], use_container_width=True)
+    st.subheader("Próximas Férias e Licenças")
+    if not ferias_df.empty or not licencas_df.empty:
+        # Filtrar apenas futuras ou em andamento
+        today = date.today()
+        
+        # Certifique-se de que as colunas de data são do tipo datetime.date para comparação correta
+        # Pandas pode carregar 'date' como datetime.datetime, então convertemos para date
+        ferias_df['DataInicio'] = pd.to_datetime(ferias_df['DataInicio']).dt.date
+        ferias_df['DataFim'] = pd.to_datetime(ferias_df['DataFim']).dt.date
+        licencas_df['DataInicio'] = pd.to_datetime(licencas_df['DataInicio']).dt.date
+        licencas_df['DataFim'] = pd.to_datetime(licencas_df['DataFim']).dt.date
+
+
+        proximas_ferias = ferias_df[ferias_df['DataFim'] >= today].sort_values(by='DataInicio').head(5)
+        proximas_licencas = licencas_df[licencas_df['DataFim'] >= today].sort_values(by='DataInicio').head(5)
+
+        st.markdown("##### Férias:")
+        if not proximas_ferias.empty:
+            ferias_com_nomes = pd.merge(proximas_ferias, funcionarios_df[['FuncionarioID', 'NomeCompleto']],
+                                        on='FuncionarioID', how='left')
+            st.dataframe(ferias_com_nomes[['NomeCompleto', 'DataInicio', 'DataFim', 'Observacoes']], use_container_width=True)
+        else:
+            st.info("Não há férias futuras registadas.")
+
+        st.markdown("##### Licenças:")
+        if not proximas_licencas.empty:
+            licencas_com_nomes = pd.merge(proximas_licencas, funcionarios_df[['FuncionarioID', 'NomeCompleto']],
+                                          on='FuncionarioID', how='left')
+            # Correção para o KeyError: 'Observacoes' not in index na tabela Licenças
+            cols_to_display_licenca = ['NomeCompleto', 'Motivo', 'DataInicio', 'DataFim']
+            if 'Observacoes' in licencas_com_nomes.columns:
+                cols_to_display_licenca.append('Observacoes')
+            st.dataframe(licencas_com_nomes[cols_to_display_licenca], use_container_width=True)
+        else:
+            st.info("Não há licenças futuras registadas.")
     else:
-        st.info("Nenhuma falta registada nos últimos 7 dias.")
+        st.info("Nenhum registo de férias ou licenças futuras encontrado.")
 
 
-# Aba: Gestão de Funcionários
+# Aba: Gestão de Funcionários (ATUALIZADO: Adicionado Departamento e DiasFeriasAnuais)
 elif st.session_state.active_tab_index == 1:
     st.title("👥 Gestão de Funcionários")
-    st.write("Adicione, edite ou apague informações dos funcionários.")
+    st.write("Adicione, edite ou remova informações de funcionários.")
 
     with st.expander("Adicionar/Editar Funcionário"):
         with st.form("funcionario_form", clear_on_submit=True):
             funcionario_id_edit = st.number_input("ID do Funcionário (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="func_id_edit")
-            nome_completo = st.text_input("Nome Completo", key="func_nome")
-            data_nascimento = st.date_input("Data de Nascimento", datetime.now(), key="func_data_nasc")
-            genero = st.selectbox("Género", ["Masculino", "Feminino", "Outro"], key="func_genero")
-            nacionalidade = st.text_input("Nacionalidade", key="func_nacionalidade")
-            morada = st.text_area("Morada", key="func_morada")
-            contacto_telefonico = st.text_input("Contacto Telefónico", key="func_contacto")
+            nome_completo = st.text_input("Nome Completo", key="func_nome_completo")
+            numero_funcionario = st.text_input("Número de Funcionário", key="func_numero")
+            data_nascimento = st.date_input("Data de Nascimento", value=date(2000, 1, 1), key="func_data_nascimento")
+            nif = st.text_input("NIF", key="func_nif")
+            niss = st.text_input("NISS", key="func_niss")
+            telefone = st.text_input("Telefone", key="func_telefone")
             email = st.text_input("Email", key="func_email")
-            nif = st.text_input("NIF", max_chars=9, key="func_nif")
-            niss = st.text_input("NISS", max_chars=11, key="func_niss")
-            data_contratacao = st.date_input("Data de Contratação", datetime.now(), key="func_data_cont")
-            cargo = st.text_input("Cargo", key="func_cargo")
-            departamento = st.text_input("Departamento", key="func_depto")
-            salario_base_mensal = st.number_input("Salário Base Mensal (€)", min_value=0.0, format="%.2f", key="func_salario")
-            valor_subsidio_alimentacao_diario = st.number_input("Valor Subsídio Alimentação Diário (€)", min_value=0.0, format="%.2f", key="func_sub_ali")
-            dias_ferias_anuais = st.number_input("Dias de Férias Anuais (Direito)", min_value=0, step=1, key="func_dias_ferias")
+            categoria_profissional = st.text_input("Categoria Profissional", key="func_categoria")
+            departamento = st.text_input("Departamento", key="func_departamento") # NOVO CAMPO
+            salario_base_mensal = st.number_input("Salário Base Mensal", min_value=0.0, format="%.2f", key="func_salario")
+            valor_subsidio_alimentacao_diario = st.number_input("Valor Subsídio Alimentação Diário", min_value=0.0, format="%.2f", key="func_subsidio")
             taxa_irs = st.number_input("Taxa IRS (%)", min_value=0.0, max_value=100.0, format="%.2f", key="func_irs") / 100
             taxa_seguranca_social_funcionario = st.number_input("Taxa Segurança Social Funcionário (%)", min_value=0.0, max_value=100.0, format="%.2f", key="func_ss") / 100
-            horas_trabalho_mensal_padrao = st.number_input("Horas de Trabalho Mensal Padrão", min_value=0.0, format="%.2f", key="func_horas_padrao")
+            horas_trabalho_mensal_padrao = st.number_input("Horas Trabalho Mensal Padrão", min_value=0, step=1, key="func_horas_padrao")
+            taxa_hora_extra_50 = st.number_input("Taxa Hora Extra 50% (%)", min_value=0.0, max_value=100.0, format="%.2f", key="func_taxa_he50") / 100
+            taxa_hora_extra_100 = st.number_input("Taxa Hora Extra 100% (%)", min_value=0.0, max_value=100.0, format="%.2f", key="func_taxa_he100") / 100
+            dias_ferias_anuais = st.number_input("Dias de Férias Anuais (Direito)", min_value=0, step=1, value=22, key="func_dias_ferias_anuais") # NOVO CAMPO
 
-            submitted_func = st.form_submit_button("Guardar Funcionário")
+            submitted = st.form_submit_button("Guardar Funcionário")
 
-            if submitted_func:
-                if not nome_completo or not cargo or not departamento:
-                    st.error("Nome, Cargo e Departamento são campos obrigatórios.")
-                else:
-                    func_data = {
-                        'NomeCompleto': nome_completo,
-                        'DataNascimento': data_nascimento,
-                        'Genero': genero,
-                        'Nacionalidade': nacionalidade,
-                        'Morada': morada,
-                        'ContactoTelefonico': contacto_telefonico,
-                        'Email': email,
-                        'NIF': nif,
-                        'NISS': niss,
-                        'DataContratacao': data_contratacao,
-                        'Cargo': cargo,
-                        'Departamento': departamento,
-                        'SalarioBaseMensal': salario_base_mensal,
-                        'ValorSubsidioAlimentacaoDiario': valor_subsidio_alimentacao_diario,
-                        'DiasFeriasAnuais': int(dias_ferias_anuais),
-                        'TaxaIRS': taxa_irs,
-                        'TaxaSegurancaSocialFuncionario': taxa_seguranca_social_funcionario,
-                        'HorasTrabalhoMensalPadrao': horas_trabalho_mensal_padrao
-                    }
-                    if funcionario_id_edit == 0:
-                        if add_funcionario(func_data):
-                            st.success("Funcionário adicionado com sucesso!")
-                        else:
-                            st.error("Erro ao adicionar funcionário.")
+            if submitted:
+                funcionario_data = {
+                    'NomeCompleto': nome_completo,
+                    'NumeroFuncionario': numero_funcionario,
+                    'DataNascimento': data_nascimento,
+                    'NIF': nif,
+                    'NISS': niss,
+                    'Telefone': telefone,
+                    'Email': email,
+                    'CategoriaProfissional': categoria_profissional,
+                    'Departamento': departamento, # NOVO CAMPO
+                    'SalarioBaseMensal': salario_base_mensal,
+                    'ValorSubsidioAlimentacaoDiario': valor_subsidio_alimentacao_diario,
+                    'TaxaIRS': taxa_irs,
+                    'TaxaSegurancaSocialFuncionario': taxa_seguranca_social_funcionario,
+                    'HorasTrabalhoMensalPadrao': horas_trabalho_mensal_padrao,
+                    'TaxaHoraExtra50': taxa_hora_extra_50,
+                    'TaxaHoraExtra100': taxa_hora_extra_100,
+                    'DiasFeriasAnuais': dias_ferias_anuais # NOVO CAMPO
+                }
+                if funcionario_id_edit == 0:
+                    if add_funcionario(funcionario_data):
+                        st.success("Funcionário adicionado com sucesso!")
                     else:
-                        if update_funcionario(funcionario_id_edit, func_data):
-                            st.success(f"Funcionário {funcionario_id_edit} atualizado com sucesso!")
-                        else:
-                            st.error("Erro ao atualizar funcionário.")
-                    st.session_state.active_tab_index = 1 # Manter na aba de funcionários
-                    st.rerun()
+                        st.error("Erro ao adicionar funcionário.")
+                else:
+                    if update_funcionario(funcionario_id_edit, funcionario_data):
+                        st.success(f"Funcionário {funcionario_id_edit} atualizado com sucesso!")
+                    else:
+                        st.error("Erro ao atualizar funcionário.")
+                st.session_state.active_tab_index = 1
+                st.rerun()
 
     st.markdown("---")
-    st.subheader("Funcionários Existentes")
-    funcionarios_df = get_funcionarios() # Recarrega dados
+    st.subheader("Lista de Funcionários")
+
     if not funcionarios_df.empty:
-        st.dataframe(funcionarios_df[['FuncionarioID', 'NomeCompleto', 'Cargo', 'Departamento', 'Email', 'ContactoTelefonico']], use_container_width=True)
+        st.dataframe(funcionarios_df[['FuncionarioID', 'NomeCompleto', 'Departamento', 'CategoriaProfissional', 'SalarioBaseMensal', 'DiasFeriasAnuais']], use_container_width=True)
 
         st.markdown("#### Apagar Funcionário")
         funcionario_ids_delete = funcionarios_df['FuncionarioID'].tolist()
         if funcionario_ids_delete:
-            funcionario_id_to_delete = st.selectbox("Selecione o ID do funcionário a apagar", funcionario_ids_delete, key="delete_func_select")
+            funcionario_id_to_delete = st.selectbox(
+                "Selecione o ID do funcionário a apagar",
+                funcionario_ids_delete,
+                key="delete_func_select"
+            )
             if st.button("Apagar Funcionário", key="delete_func_button"):
-                if delete_funcionario(funcionario_id_to_delete):
-                    st.success(f"Funcionário ID {funcionario_id_to_delete} apagado com sucesso!")
-                    st.session_state.active_tab_index = 1
-                    st.rerun()
-                else:
-                    st.error(f"Erro ao apagar funcionário ID {funcionario_id_to_delete}. Pode haver registos dependentes.")
+                confirm = st.warning("Apagar um funcionário também apagará todos os registos diários, férias, faltas, licenças e acertos semestrais associados. Tem certeza? **Confirme abaixo.**")
+                if st.button("Sim, Apagar Definitivamente", key="confirm_delete_func_button"):
+                    if delete_funcionario(funcionario_id_to_delete):
+                        st.success(f"Funcionário ID {funcionario_id_to_delete} e todos os seus dados relacionados apagados com sucesso!")
+                        st.session_state.active_tab_index = 1
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao apagar funcionário ID {funcionario_id_to_delete}.")
         else:
-            st.info("Nenhum funcionário para apagar.")
-    else:
-        st.info("Nenhum funcionário registado.")
+            st.info("Não há funcionários para apagar.")
 
-# Aba: Registos de Presença
+
+# Aba: Registos de Presença (Diários, Férias, Faltas, Licenças, Tipos de Ocorrência)
 elif st.session_state.active_tab_index == 2:
-    st.title("⏰ Registos de Presença")
+    st.title("📝 Registos de Presença e Ausência")
     st.write("Gerencie os registos diários, férias, faltas e licenças dos funcionários.")
 
     registro_type = st.radio(
-        "Selecione o Tipo de Registo:",
-        ["Registo Diário", "Férias", "Faltas", "Licenças", "Tipos de Ocorrência"],
-        key="registro_type_select"
+        "Selecione o tipo de registo:",
+        ("Registo Diário", "Férias", "Faltas", "Licenças", "Tipos de Ocorrência"),
+        key="registro_type_radio",
+        horizontal=True
     )
 
-    # --- Gestão de Registo Diário ---
+    # --- Formulário de Registo Diário ---
     if registro_type == "Registo Diário":
-        st.subheader("Gestão de Registo Diário")
-        st.info("Registe as horas trabalhadas, extras e ausências diárias.")
-
-        with st.expander("Adicionar/Editar Registo Diário"):
+        st.subheader("Adicionar/Editar Registo Diário")
+        st.info("Os campos abaixo permitem registar `HorasTrabalhadas`, `HorasExtraDiarias`, `HorasAusencia` e `Observacoes` diretamente, conforme a sua tabela `RegistosDiarios`.")
+        with st.expander("Formulário de Registo Diário"):
             with st.form("registo_diario_form", clear_on_submit=True):
                 registo_id_edit = st.number_input("ID do Registo (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="rd_id_edit")
                 selected_funcionario_name_rd = st.selectbox("Funcionário", funcionario_nomes, key="rd_funcionario_select")
                 selected_funcionario_id_rd = funcionario_id_map.get(selected_funcionario_name_rd)
-                data_registo = st.date_input("Data do Registo", datetime.now(), key="rd_data_registo")
-
-                # Filtrar tipos de ocorrência para o selectbox
-                tipos_ocorrencia_para_select = ['Selecione um Tipo']
-                tipo_ocorrencia_map = {}
-                if not tipos_ocorrencia_df.empty:
-                    tipos_ocorrencia_para_select.extend(tipos_ocorrencia_df['Descricao'].tolist())
-                    tipo_ocorrencia_map = pd.Series(tipos_ocorrencia_df.TipoOcorrenciaID.values, index=tipos_ocorrencia_df.Descricao).to_dict()
-
-                selected_tipo_ocorrencia_desc = st.selectbox("Tipo de Ocorrência", tipos_ocorrencia_para_select, key="rd_tipo_ocorrencia_select")
-                tipo_ocorrencia_id = tipo_ocorrencia_map.get(selected_tipo_ocorrencia_desc)
-
-
-                horas_trabalhadas = st.number_input("Horas Trabalhadas", min_value=0.0, format="%.2f", key="rd_horas_trab")
-                horas_extra_diarias = st.number_input("Horas Extra Diárias", min_value=0.0, format="%.2f", key="rd_horas_extra")
-                horas_ausencia = st.number_input("Horas de Ausência (se aplicável)", min_value=0.0, format="%.2f", key="rd_horas_ausencia")
-                observacoes_rd = st.text_area("Observações (Registo Diário)", key="rd_observacoes")
+                data_registo = st.date_input("Data do Registo", value=date.today(), key="rd_data_registo")
+                selected_tipo_ocorrencia_name_rd = st.selectbox("Tipo de Ocorrência", tipo_ocorrencia_nomes, key="rd_tipo_ocorrencia_select")
+                selected_tipo_ocorrencia_id_rd = tipo_ocorrencia_id_map.get(selected_tipo_ocorrencia_name_rd)
+                horas_trabalhadas = st.number_input("Horas Trabalhadas (normais)", min_value=0.0, format="%.2f", key="rd_horas_trabalhadas")
+                horas_extra_diarias = st.number_input("Horas Extra Diárias", min_value=0.0, format="%.2f", key="rd_horas_extra_diarias")
+                horas_ausencia = st.number_input("Horas de Ausência (não justificadas, se aplicável)", min_value=0.0, format="%.2f", key="rd_horas_ausencia")
+                observacoes = st.text_area("Observações", key="rd_observacoes")
 
                 submitted_rd = st.form_submit_button("Guardar Registo Diário")
 
                 if submitted_rd:
-                    if selected_funcionario_id_rd is None or selected_funcionario_name_rd == 'Selecione um Funcionário':
-                        st.error("Por favor, selecione um funcionário.")
-                    elif tipo_ocorrencia_id is None or selected_tipo_ocorrencia_desc == 'Selecione um Tipo':
-                        st.error("Por favor, selecione um tipo de ocorrência.")
-                    else:
-                        rd_data = {
+                    if selected_funcionario_id_rd and selected_tipo_ocorrencia_id_rd is not None:
+                        registo_data = {
                             'FuncionarioID': selected_funcionario_id_rd,
                             'DataRegisto': data_registo,
-                            'TipoOcorrenciaID': tipo_ocorrencia_id,
+                            'TipoOcorrenciaID': selected_tipo_ocorrencia_id_rd,
                             'HorasTrabalhadas': horas_trabalhadas,
                             'HorasExtraDiarias': horas_extra_diarias,
                             'HorasAusencia': horas_ausencia,
-                            'Observacoes': observacoes_rd
+                            'Observacoes': observacoes
                         }
                         if registo_id_edit == 0:
-                            if add_registo_diario(rd_data):
+                            if add_registo_diario(registo_data):
                                 st.success("Registo diário adicionado com sucesso!")
                             else:
                                 st.error("Erro ao adicionar registo diário.")
                         else:
-                            if update_registo_diario(registo_id_edit, rd_data):
+                            if update_registo_diario(registo_id_edit, registo_data):
                                 st.success(f"Registo diário {registo_id_edit} atualizado com sucesso!")
                             else:
                                 st.error("Erro ao atualizar registo diário.")
                         st.session_state.active_tab_index = 2
                         st.rerun()
+                    else:
+                        st.warning("Por favor, selecione um funcionário e um tipo de ocorrência.")
 
         st.markdown("---")
         st.subheader("Registos Diários Existentes")
         registos_diarios_df = get_registos_diarios() # Recarrega dados
         if not registos_diarios_df.empty:
-            registos_com_nomes = pd.merge(registos_diarios_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']], on='FuncionarioID', how='left')
-            registos_com_nomes = pd.merge(registos_com_nomes, tipos_ocorrencia_df[['TipoOcorrenciaID', 'Descricao']], on='TipoOcorrenciaID', how='left')
-            cols_to_display_rd = ['RegistoID', 'NomeCompleto', 'DataRegisto', 'Descricao', 'HorasTrabalhadas', 'HorasExtraDiarias', 'HorasAusencia']
-            if 'Observacoes' in registos_com_nomes.columns:
-                cols_to_display_rd.append('Observacoes')
-            st.dataframe(registos_com_nomes[cols_to_display_rd], use_container_width=True)
+            registos_diarios_com_nomes = pd.merge(registos_diarios_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']], on='FuncionarioID', how='left')
+            registos_diarios_com_nomes = pd.merge(registos_diarios_com_nomes, tipos_ocorrencia_df[['TipoOcorrenciaID', 'Descricao']], left_on='TipoOcorrenciaID', right_on='TipoOcorrenciaID', how='left') # Corrigido aqui
+            registos_diarios_com_nomes = registos_diarios_com_nomes.rename(columns={'Descricao': 'Tipo de Ocorrência'})
+            st.dataframe(registos_diarios_com_nomes[['RegistoID', 'NomeCompleto', 'DataRegisto', 'Tipo de Ocorrência', 'HorasTrabalhadas', 'HorasExtraDiarias', 'HorasAusencia', 'Observacoes']], use_container_width=True)
 
             st.markdown("#### Apagar Registo Diário")
             registo_ids_delete = registos_diarios_df['RegistoID'].tolist()
@@ -814,58 +1037,51 @@ elif st.session_state.active_tab_index == 2:
         else:
             st.info("Nenhum registo diário encontrado.")
 
-    # --- Gestão de Férias ---
+    # --- Formulário de Férias (ATUALIZADO: Com campo Aprovado) ---
     elif registro_type == "Férias":
-        st.subheader("Gestão de Férias")
-        st.info("Registe e aprove os períodos de férias dos funcionários.")
-
-        with st.expander("Adicionar/Editar Registo de Férias"):
+        st.subheader("Adicionar/Editar Registo de Férias")
+        with st.expander("Formulário de Férias"):
             with st.form("ferias_form", clear_on_submit=True):
                 ferias_id_edit = st.number_input("ID das Férias (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="ferias_id_edit")
                 selected_funcionario_name_ferias = st.selectbox("Funcionário", funcionario_nomes, key="ferias_funcionario_select")
                 selected_funcionario_id_ferias = funcionario_id_map.get(selected_funcionario_name_ferias)
-                data_inicio_ferias = st.date_input("Data de Início", datetime.now(), key="ferias_data_inicio")
-                data_fim_ferias = st.date_input("Data de Fim", datetime.now(), key="ferias_data_fim")
-                observacoes_ferias = st.text_area("Observações (Férias)", key="ferias_observacoes")
-                aprovado_ferias = st.checkbox("Aprovado", key="ferias_aprovado")
+                data_inicio_ferias = st.date_input("Data de Início", value=date.today(), key="ferias_data_inicio")
+                data_fim_ferias = st.date_input("Data de Fim", value=date.today() + timedelta(days=7), key="ferias_data_fim")
+                observacoes_ferias = st.text_area("Observações", key="ferias_obs")
+                aprovado_ferias = st.checkbox("Aprovado?", key="ferias_aprovado") # NOVO CAMPO
 
-                submitted_ferias = st.form_submit_button("Guardar Registo de Férias")
+                submitted_ferias = st.form_submit_button("Guardar Férias")
 
                 if submitted_ferias:
-                    if selected_funcionario_id_ferias is None or selected_funcionario_name_ferias == 'Selecione um Funcionário':
-                        st.error("Por favor, selecione um funcionário.")
-                    elif data_inicio_ferias > data_fim_ferias:
-                        st.error("A data de início não pode ser posterior à data de fim.")
-                    else:
+                    if selected_funcionario_id_ferias:
                         ferias_data = {
                             'FuncionarioID': selected_funcionario_id_ferias,
                             'DataInicio': data_inicio_ferias,
                             'DataFim': data_fim_ferias,
                             'Observacoes': observacoes_ferias,
-                            'Aprovado': aprovado_ferias
+                            'Aprovado': aprovado_ferias # NOVO CAMPO
                         }
                         if ferias_id_edit == 0:
                             if add_ferias(ferias_data):
-                                st.success("Registo de férias adicionado com sucesso!")
+                                st.success("Férias adicionadas com sucesso!")
                             else:
-                                st.error("Erro ao adicionar registo de férias.")
+                                st.error("Erro ao adicionar férias.")
                         else:
                             if update_ferias(ferias_id_edit, ferias_data):
-                                st.success(f"Registo de férias {ferias_id_edit} atualizado com sucesso!")
+                                st.success(f"Férias {ferias_id_edit} atualizadas com sucesso!")
                             else:
-                                st.error("Erro ao atualizar registo de férias.")
+                                st.error("Erro ao atualizar férias.")
                         st.session_state.active_tab_index = 2
                         st.rerun()
+                    else:
+                        st.warning("Por favor, selecione um funcionário.")
 
         st.markdown("---")
         st.subheader("Registos de Férias Existentes")
-        ferias_df = get_ferias() # Recarrega dados
+        ferias_df = get_ferias()
         if not ferias_df.empty:
             ferias_com_nomes = pd.merge(ferias_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']], on='FuncionarioID', how='left')
-            cols_to_display_ferias = ['FeriasID', 'NomeCompleto', 'DataInicio', 'DataFim', 'Aprovado'] # Exibir Aprovado
-            if 'Observacoes' in ferias_com_nomes.columns:
-                cols_to_display_ferias.append('Observacoes')
-            st.dataframe(ferias_com_nomes[cols_to_display_ferias], use_container_width=True)
+            st.dataframe(ferias_com_nomes[['FeriasID', 'NomeCompleto', 'DataInicio', 'DataFim', 'Aprovado', 'Observacoes']], use_container_width=True) # Exibir Aprovado
 
             st.markdown("#### Apagar Registo de Férias")
             ferias_ids_delete = ferias_df['FeriasID'].tolist()
@@ -873,67 +1089,63 @@ elif st.session_state.active_tab_index == 2:
                 ferias_id_to_delete = st.selectbox("Selecione o ID das férias a apagar", ferias_ids_delete, key="delete_ferias_select")
                 if st.button("Apagar Férias", key="delete_ferias_button"):
                     if delete_ferias(ferias_id_to_delete):
-                        st.success(f"Registo de férias ID {ferias_id_to_delete} apagado com sucesso!")
+                        st.success(f"Férias ID {ferias_id_to_delete} apagadas com sucesso!")
                         st.session_state.active_tab_index = 2
                         st.rerun()
                     else:
-                        st.error(f"Erro ao apagar registo de férias ID {ferias_id_to_delete}.")
+                        st.error(f"Erro ao apagar férias ID {ferias_id_to_delete}.")
             else:
                 st.info("Nenhum registo de férias para apagar.")
         else:
             st.info("Nenhum registo de férias encontrado.")
 
-    # --- Gestão de Faltas ---
+    # --- Formulário de Faltas (ATUALIZADO: Com campo Aprovado) ---
     elif registro_type == "Faltas":
-        st.subheader("Gestão de Faltas")
-        st.info("Registe e gerencie as faltas dos funcionários.")
-
-        with st.expander("Adicionar/Editar Registo de Falta"):
+        st.subheader("Adicionar/Editar Registo de Falta")
+        with st.expander("Formulário de Falta"):
             with st.form("falta_form", clear_on_submit=True):
-                falta_id_edit = st.number_input("ID da Falta (para editar, deixe 0 para adicionar nova)", min_value=0, value=0, step=1, key="falta_id_edit")
-                selected_funcionario_name_falta = st.selectbox("Funcionário", funcionario_nomes, key="falta_funcionario_select")
-                selected_funcionario_id_falta = funcionario_id_map.get(selected_funcionario_name_falta)
-                data_falta = st.date_input("Data da Falta", datetime.now(), key="falta_data_falta")
-                motivo_falta = st.text_area("Motivo da Falta", key="falta_motivo")
-                justificada_falta = st.checkbox("Justificada", key="falta_justificada")
+                falta_id_edit = st.number_input("ID da Falta (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="falta_id_edit")
+                selected_funcionario_name_faltas = st.selectbox("Funcionário", funcionario_nomes, key="faltas_funcionario_select")
+                selected_funcionario_id_faltas = funcionario_id_map.get(selected_funcionario_name_faltas)
+                data_falta = st.date_input("Data da Falta", value=date.today(), key="falta_data_falta")
+                motivo_falta = st.text_input("Motivo da Falta", key="falta_motivo")
+                justificada_falta = st.checkbox("Falta Justificada?", key="falta_justificada")
                 horas_ausencia_falta = st.number_input("Horas de Ausência pela Falta", min_value=0.0, format="%.2f", key="falta_horas_ausencia")
-                aprovado_falta = st.checkbox("Aprovado", key="falta_aprovado")
+                aprovado_falta = st.checkbox("Aprovado?", key="falta_aprovado") # NOVO CAMPO
 
-
-                submitted_falta = st.form_submit_button("Guardar Registo de Falta")
+                submitted_falta = st.form_submit_button("Guardar Falta")
 
                 if submitted_falta:
-                    if selected_funcionario_id_falta is None or selected_funcionario_name_falta == 'Selecione um Funcionário':
-                        st.error("Por favor, selecione um funcionário.")
-                    else:
+                    if selected_funcionario_id_faltas:
                         falta_data = {
-                            'FuncionarioID': selected_funcionario_id_falta,
+                            'FuncionarioID': selected_funcionario_id_faltas,
                             'DataFalta': data_falta,
                             'Motivo': motivo_falta,
                             'Justificada': justificada_falta,
                             'HorasAusenciaFalta': horas_ausencia_falta,
-                            'Aprovado': aprovado_falta
+                            'Aprovado': aprovado_falta # NOVO CAMPO
                         }
                         if falta_id_edit == 0:
                             if add_falta(falta_data):
-                                st.success("Registo de falta adicionado com sucesso!")
+                                st.success("Falta adicionada com sucesso!")
                             else:
-                                st.error("Erro ao adicionar registo de falta.")
+                                st.error("Erro ao adicionar falta.")
                         else:
                             if update_falta(falta_id_edit, falta_data):
-                                st.success(f"Registo de falta {falta_id_edit} atualizado com sucesso!")
+                                st.success(f"Falta {falta_id_edit} atualizada com sucesso!")
                             else:
-                                st.error("Erro ao atualizar registo de falta.")
+                                st.error("Erro ao atualizar falta.")
                         st.session_state.active_tab_index = 2
                         st.rerun()
+                    else:
+                        st.warning("Por favor, selecione um funcionário.")
 
         st.markdown("---")
         st.subheader("Registos de Faltas Existentes")
-        faltas_df = get_faltas() # Recarrega dados
+        faltas_df = get_faltas()
         if not faltas_df.empty:
             faltas_com_nomes = pd.merge(faltas_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']], on='FuncionarioID', how='left')
-            cols_to_display_falta = ['FaltaID', 'NomeCompleto', 'DataFalta', 'Motivo', 'Justificada', 'HorasAusenciaFalta', 'Aprovado'] # Exibir Aprovado
-            st.dataframe(faltas_com_nomes[cols_to_display_falta], use_container_width=True)
+            st.dataframe(faltas_com_nomes[['FaltaID', 'NomeCompleto', 'DataFalta', 'Motivo', 'Justificada', 'HorasAusenciaFalta', 'Aprovado']], use_container_width=True) # Exibir Aprovado
 
             st.markdown("#### Apagar Registo de Falta")
             falta_ids_delete = faltas_df['FaltaID'].tolist()
@@ -951,60 +1163,56 @@ elif st.session_state.active_tab_index == 2:
         else:
             st.info("Nenhum registo de falta encontrado.")
 
-    # --- Gestão de Licenças ---
+    # --- Formulário de Licenças (ATUALIZADO: Com campo Aprovado) ---
     elif registro_type == "Licenças":
-        st.subheader("Gestão de Licenças")
-        st.info("Registe e gerencie as licenças dos funcionários.")
-
-        with st.expander("Adicionar/Editar Registo de Licença"):
+        st.subheader("Adicionar/Editar Registo de Licença")
+        with st.expander("Formulário de Licença"):
             with st.form("licenca_form", clear_on_submit=True):
-                licenca_id_edit = st.number_input("ID da Licença (para editar, deixe 0 para adicionar nova)", min_value=0, value=0, step=1, key="licenca_id_edit")
+                licenca_id_edit = st.number_input("ID da Licença (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="licenca_id_edit")
                 selected_funcionario_name_licenca = st.selectbox("Funcionário", funcionario_nomes, key="licenca_funcionario_select")
                 selected_funcionario_id_licenca = funcionario_id_map.get(selected_funcionario_name_licenca)
-                data_inicio_licenca = st.date_input("Data de Início", datetime.now(), key="licenca_data_inicio")
-                data_fim_licenca = st.date_input("Data de Fim", datetime.now(), key="licenca_data_fim")
-                motivo_licenca = st.text_area("Motivo da Licença", key="licenca_motivo")
-                observacoes_licenca = st.text_area("Observações (Licença)", key="licenca_observacoes")
-                aprovado_licenca = st.checkbox("Aprovado", key="licenca_aprovado")
+                data_inicio_licenca = st.date_input("Data de Início", value=date.today(), key="licenca_data_inicio")
+                data_fim_licenca = st.date_input("Data de Fim", value=date.today() + timedelta(days=7), key="licenca_data_fim")
+                motivo_licenca = st.text_input("Motivo da Licença", key="licenca_motivo")
+                observacoes_licenca = st.text_area("Observações", key="licenca_obs")
+                aprovado_licenca = st.checkbox("Aprovado?", key="licenca_aprovado") # NOVO CAMPO
 
-                submitted_licenca = st.form_submit_button("Guardar Registo de Licença")
+                submitted_licenca = st.form_submit_button("Guardar Licença")
 
                 if submitted_licenca:
-                    if selected_funcionario_id_licenca is None or selected_funcionario_name_licenca == 'Selecione um Funcionário':
-                        st.error("Por favor, selecione um funcionário.")
-                    elif data_inicio_licenca > data_fim_licenca:
-                        st.error("A data de início não pode ser posterior à data de fim.")
-                    else:
+                    if selected_funcionario_id_licenca:
                         licenca_data = {
                             'FuncionarioID': selected_funcionario_id_licenca,
                             'DataInicio': data_inicio_licenca,
                             'DataFim': data_fim_licenca,
                             'Motivo': motivo_licenca,
                             'Observacoes': observacoes_licenca,
-                            'Aprovado': aprovado_licenca
+                            'Aprovado': aprovado_licenca # NOVO CAMPO
                         }
                         if licenca_id_edit == 0:
                             if add_licenca(licenca_data):
-                                st.success("Registo de licença adicionado com sucesso!")
+                                st.success("Licença adicionada com sucesso!")
                             else:
-                                st.error("Erro ao adicionar registo de licença.")
+                                st.error("Erro ao adicionar licença.")
                         else:
                             if update_licenca(licenca_id_edit, licenca_data):
-                                st.success(f"Registo de licença {licenca_id_edit} atualizado com sucesso!")
+                                st.success(f"Licença {licenca_id_edit} atualizada com sucesso!")
                             else:
-                                st.error("Erro ao atualizar registo de licença.")
+                                st.error("Erro ao atualizar licença.")
                         st.session_state.active_tab_index = 2
                         st.rerun()
+                    else:
+                        st.warning("Por favor, selecione um funcionário.")
 
         st.markdown("---")
         st.subheader("Registos de Licenças Existentes")
-        licencas_df = get_licencas() # Recarrega dados
+        licencas_df = get_licencas()
         if not licencas_df.empty:
             licencas_com_nomes = pd.merge(licencas_df, funcionarios_df[['FuncionarioID', 'NomeCompleto']], on='FuncionarioID', how='left')
             cols_to_display_licenca = ['LicencaID', 'NomeCompleto', 'Motivo', 'DataInicio', 'DataFim', 'Aprovado'] # Exibir Aprovado
             if 'Observacoes' in licencas_com_nomes.columns:
                 cols_to_display_licenca.append('Observacoes')
-
+            
             st.dataframe(licencas_com_nomes[cols_to_display_licenca], use_container_width=True)
 
             st.markdown("#### Apagar Registo de Licença")
@@ -1012,7 +1220,7 @@ elif st.session_state.active_tab_index == 2:
             if licenca_ids_delete:
                 licenca_id_to_delete = st.selectbox("Selecione o ID da licença a apagar", licenca_ids_delete, key="delete_licenca_select")
                 if st.button("Apagar Licença", key="delete_licenca_button"):
-                    if delete_licenca(licenca_id_to_delete):
+                    if delete_licenca(licenca_id_to_delete): 
                         st.success(f"Licença ID {licenca_id_to_delete} apagada com sucesso!")
                         st.session_state.active_tab_index = 2
                         st.rerun()
@@ -1027,7 +1235,7 @@ elif st.session_state.active_tab_index == 2:
     elif registro_type == "Tipos de Ocorrência":
         st.subheader("Gestão de Tipos de Ocorrência")
         st.info("Adicione, edite ou apague os tipos de ocorrência utilizados no sistema.")
-
+        
         with st.expander("Adicionar/Editar Tipo de Ocorrência"):
             with st.form("tipo_ocorrencia_form", clear_on_submit=True):
                 tipo_id_edit = st.number_input("ID do Tipo (para editar, deixe 0 para adicionar novo)", min_value=0, value=0, step=1, key="to_id_edit")
@@ -1078,7 +1286,7 @@ elif st.session_state.active_tab_index == 2:
             st.dataframe(tipos_ocorrencia_df, use_container_width=True)
 
             st.markdown("#### Apagar Tipo de Ocorrência")
-            tipo_ids_delete = tipos_ocorrencia_df['TipoOcorrenciaID'].tolist()
+            tipo_ids_delete = tipos_ocorrencia_df['TipoOcorrenciaID'].tolist() # Corrigido aqui
             if tipo_ids_delete:
                 tipo_id_to_delete = st.selectbox("Selecione o ID do tipo a apagar", tipo_ids_delete, key="delete_to_select")
                 if st.button("Apagar Tipo de Ocorrência", key="delete_to_button"):
@@ -1134,8 +1342,8 @@ elif st.session_state.active_tab_index == 3:
             taxa_irs = float(funcionario_info['TaxaIRS'])
             taxa_seguranca_social_funcionario = float(funcionario_info['TaxaSegurancaSocialFuncionario'])
             horas_trabalho_mensal_padrao = float(funcionario_info['HorasTrabalhoMensalPadrao'])
-            taxa_hora_extra_50 = float(funcionario_info['TaxaHoraExtra50']) if 'TaxaHoraExtra50' in funcionario_info else 0.50 # Adicione estas colunas ao seu DB/DataFrame
-            taxa_hora_extra_100 = float(funcionario_info['TaxaHoraExtra100']) if 'TaxaHoraExtra100' in funcionario_info else 1.00 # Adicione estas colunas ao seu DB/DataFrame
+            taxa_hora_extra_50 = float(funcionario_info['TaxaHoraExtra50'])
+            taxa_hora_extra_100 = float(funcionario_info['TaxaHoraExtra100'])
 
             total_horas_trabalhadas_mes = registos_diarios_mes['HorasTrabalhadas'].sum() if not registos_diarios_mes.empty else 0.0
             total_horas_extra_mes = registos_diarios_mes['HorasExtraDiarias'].sum() if not registos_diarios_mes.empty else 0.0
@@ -1248,9 +1456,7 @@ elif st.session_state.active_tab_index == 4:
             submitted_acerto = st.form_submit_button("Guardar Acerto Semestral")
 
             if submitted_acerto:
-                if selected_funcionario_id_acerto is None or selected_funcionario_name_acerto == 'Selecione um Funcionário':
-                    st.warning("Por favor, selecione um funcionário.")
-                else:
+                if selected_funcionario_id_acerto:
                     acerto_data = {
                         'FuncionarioID': selected_funcionario_id_acerto,
                         'Ano': ano_acerto,
@@ -1271,6 +1477,8 @@ elif st.session_state.active_tab_index == 4:
                             st.rerun()
                         else:
                             st.error("Erro ao atualizar acerto semestral.")
+                else:
+                    st.warning("Por favor, selecione um funcionário.")
 
     st.markdown("---")
     st.subheader("Acertos Semestrais Existentes")
@@ -1321,9 +1529,9 @@ elif st.session_state.active_tab_index == 5:
         for index, func_row in funcionarios_filtrados_df.iterrows():
             funcionario_id = func_row['FuncionarioID']
             nome_completo = func_row['NomeCompleto']
-
+            
             # ATUALIZADO: Garantir que DiasFeriasAnuais é um int, mesmo se for None/NaN na DB
-            dias_ferias_anuais = int(func_row['DiasFeriasAnuais']) if pd.notna(func_row['DiasFeriasAnuais']) else 22
+            dias_ferias_anuais = int(func_row['DiasFeriasAnuais']) if pd.notna(func_row['DiasFeriasAnuais']) else 22 
 
             # Calcular Horas Extra Acumuladas
             horas_extra_acumuladas = acertos_semestrais_df[
@@ -1400,7 +1608,7 @@ elif st.session_state.active_tab_index == 5:
 
     # --- Quadro Mensal de Ocorrências (Assiduidade) ---
     st.subheader(f"Quadro Mensal de Ocorrências: {mes_relatorio_global:02d}/{ano_relatorio_global}")
-
+    
     if st.button("Gerar Quadro Mensal", key="gerar_quadro_mensal_button"):
         if not funcionarios_filtrados_df.empty and not tipos_ocorrencia_df.empty:
             num_days_in_month = calendar.monthrange(ano_relatorio_global, mes_relatorio_global)[1]
@@ -1415,7 +1623,7 @@ elif st.session_state.active_tab_index == 5:
                 funcionario_id = func_row['FuncionarioID']
                 nome_completo = func_row['NomeCompleto']
                 row_values = {'Funcionário': nome_completo}
-
+                
                 total_horas_normais_func = 0.0
                 total_horas_extra_func = 0.0
                 total_dias_ferias_func = 0
@@ -1427,10 +1635,10 @@ elif st.session_state.active_tab_index == 5:
 
                 if not registos_diarios_func.empty: registos_diarios_func['DataRegisto'] = pd.to_datetime(registos_diarios_func['DataRegisto']).dt.date
                 if not faltas_func.empty: faltas_func['DataFalta'] = pd.to_datetime(faltas_func['DataFalta']).dt.date
-                if not ferias_func.empty:
+                if not ferias_func.empty: 
                     ferias_func['DataInicio'] = pd.to_datetime(ferias_func['DataInicio']).dt.date
                     ferias_func['DataFim'] = pd.to_datetime(ferias_func['DataFim']).dt.date
-                if not licencas_func.empty:
+                if not licencas_func.empty: 
                     licencas_func['DataInicio'] = pd.to_datetime(licencas_func['DataInicio']).dt.date
                     licencas_func['DataFim'] = pd.to_datetime(licencas_func['DataFim']).dt.date
 
@@ -1458,10 +1666,10 @@ elif st.session_state.active_tab_index == 5:
                                     reg_info = registo_do_dia.iloc[0]
                                     tipo_ocorrencia_id = reg_info['TipoOcorrenciaID']
                                     sigla = get_sigla_by_tipo_id(tipo_ocorrencia_id, tipos_ocorrencia_df)
-
+                                    
                                     total_horas_normais_func += reg_info['HorasTrabalhadas']
                                     total_horas_extra_func += reg_info['HorasExtraDiarias']
-
+                                    
                     row_values[f'Dia {day}'] = sigla
 
                 row_values['Total Horas Normais'] = f"{total_horas_normais_func:.2f}"
@@ -1511,7 +1719,7 @@ elif st.session_state.active_tab_index == 5:
 
     # --- Relatórios por Tipo de Ocorrência ---
     st.subheader(f"Análise de Horas por Tipo de Ocorrência (Mês: {mes_relatorio_global:02d}/{ano_relatorio_global})")
-
+    
     if st.button("Gerar Análise por Ocorrência", key="gerar_analise_ocorrencia_button"):
         if not funcionarios_filtrados_df.empty and not registos_diarios_df.empty and not tipos_ocorrencia_df.empty:
             start_of_month = date(ano_relatorio_global, mes_relatorio_global, 1)
@@ -1526,9 +1734,9 @@ elif st.session_state.active_tab_index == 5:
 
             if not registos_periodo.empty:
                 # Merge com tipos de ocorrência para obter a descrição
-                registos_com_tipo = pd.merge(registos_periodo, tipos_ocorrencia_df[['TipoOcorrenciaID', 'Descricao', 'EhHorasExtra', 'EhAusencia']],
+                registos_com_tipo = pd.merge(registos_periodo, tipos_ocorrencia_df[['TipoOcorrenciaID', 'Descricao', 'EhHorasExtra', 'EhAusencia']], # Corrigido aqui
                                              on='TipoOcorrenciaID', how='left')
-
+                
                 # Agrupar por descrição do tipo de ocorrência e somar horas
                 horas_por_tipo = registos_com_tipo.groupby('Descricao').agg(
                     TotalHorasTrabalhadas=('HorasTrabalhadas', 'sum'),
@@ -1565,10 +1773,52 @@ elif st.session_state.active_tab_index == 5:
             st.info("Nenhum funcionário ou registo de ocorrência encontrado para gerar esta análise.")
 
 
-# Aba: Configurações
+# Aba: Testar DB
 elif st.session_state.active_tab_index == 6:
-    st.title("⚙️ Configurações")
-    st.write("Ajuste as configurações gerais do sistema aqui.")
+    st.title("🛠️ Teste de Conexão à Base de Dados")
+    st.write("Use esta aba para verificar o estado da conexão com a sua base de dados SQL Server.")
 
-    st.markdown("#### Gestão de Utilizadores (Funcionalidade Futura)")
-    st.info("Esta secção permitirá gerir utilizadores, permissões e roles no futuro.")
+    if st.button("Testar Conexão Agora", key="test_db_button_main"):
+        conn = get_db_connection()
+        if conn:
+            st.success("Conexão com a base de dados estabelecida com sucesso!")
+            try:
+                test_df = fetch_data("SELECT GETDATE() AS CurrentDateTime")
+                if not test_df.empty:
+                    st.success(f"Query de teste executada com sucesso. Data/Hora do servidor: {test_df['CurrentDateTime'].iloc[0]}")
+                else:
+                    st.warning("Conexão estabelecida, mas a query de teste retornou vazio ou falhou.")
+            except Exception as e:
+                st.error(f"Erro ao executar query de teste: {e}")
+        else:
+            st.error("Falha na conexão com a base de dados. Verifique as mensagens de erro acima e as configurações.")
+
+    st.markdown("---")
+    st.subheader("Verificar Tabelas")
+    st.write("Esta seção tentará listar as primeiras linhas de cada tabela para confirmar que estão acessíveis e têm dados.")
+
+    tabelas = {
+        "Funcionários": "dbo.Funcionarios",
+        "RegistosDiarios": "dbo.RegistosDiarios",
+        "Ferias": "dbo.Ferias",
+        "Faltas": "dbo.Faltas",
+        "Licencas": "dbo.Licencas",
+        "TiposOcorrencia": "dbo.TiposOcorrencia",
+        "AcertosSemestrais": "dbo.AcertosSemestrais"
+    }
+
+    for nome_tabela, tabela_db in tabelas.items():
+        st.markdown(f"##### {nome_tabela} (`{tabela_db}`)")
+        try:
+            df_table = fetch_data(f"SELECT TOP 5 * FROM {tabela_db}")
+            if not df_table.empty:
+                st.dataframe(df_table, use_container_width=True)
+                count_df = fetch_data(f'SELECT COUNT(*) AS RowCount FROM {tabela_db}')
+                if not count_df.empty:
+                    st.success(f"Tabela '{nome_tabela}' acessada com sucesso. Total de linhas: {count_df['RowCount'].iloc[0]}")
+                else:
+                    st.warning(f"Tabela '{nome_tabela}' acessada, mas não foi possível contar as linhas.")
+            else:
+                st.info(f"Tabela '{nome_tabela}' acessada, mas está vazia ou retornou nenhum dado.")
+        except Exception as e:
+            st.error(f"Erro ao aceder à tabela '{nome_tabela}': {e}")
