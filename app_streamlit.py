@@ -219,7 +219,6 @@ DB_DATABASE = st.secrets["connections.sql_server"]["database"]
 DB_UID = st.secrets["connections.sql_server"]["uid"]
 DB_PWD = st.secrets["connections.sql_server"]["pwd"]
 
-
 # --- Funções de Conexão à Base de Dados ---
 @st.cache_resource
 def get_db_connection():
