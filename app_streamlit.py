@@ -13,6 +13,98 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib import colors
 from io import BytesIO # Para lidar com o PDF em memória
 
+# --- Configurações da Base de Dados ---
+# O DB_DRIVER é fixo para o ODBC Driver 17 for SQL Server, essencial para Azure SQL.
+DB_DRIVER = '{ODBC Driver 17 for SQL Server}' 
+
+# As credenciais da base de dados NÃO DEVEM ser hardcoded aqui.
+# Elas serão lidas de st.secrets, que por sua vez obtém os valores de:
+# 1. Localmente: do ficheiro .streamlit/secrets.toml
+# 2. No Streamlit Cloud: das configurações de 'Secrets' no painel de deploy.
+
+
+# --- Funções de Conexão e Interação com a Base de Dados ---
+
+@st.cache_resource(ttl=600) # Cacheia a conexão por 10 minutos (600 segundos) para reuso e eficiência
+def get_db_connection():
+    """
+    Estabelece e cacheia a conexão com a base de dados Azure SQL.
+    Lê as credenciais de conexão dos secrets do Streamlit Cloud.
+    """
+    try:
+        # Lê as credenciais dos secrets do Streamlit Cloud
+        # Estes nomes de chaves (AZURE_SQL_SERVER, etc.) devem corresponder EXATAMENTE
+        # aos nomes que definiu no seu ficheiro .streamlit/secrets.toml e nas configurações de Secrets do Streamlit Cloud.
+        azure_sql_server = st.secrets["AZURE_SQL_SERVER"]
+        azure_sql_database = st.secrets["AZURE_SQL_DATABASE"]
+        azure_sql_username = st.secrets["AZURE_SQL_USERNAME"]
+        azure_sql_password = st.secrets["AZURE_SQL_PASSWORD"]
+
+        conn_string = (
+            f"DRIVER={DB_DRIVER};"
+            f"SERVER=tcp:{azure_sql_server},1433;" # Importante: 'tcp:' e porta 1433 para Azure SQL
+            f"DATABASE={azure_sql_database};"
+            f"UID={azure_sql_username};"
+            f"PWD={azure_sql_password};"
+            "Encrypt=yes;"       # Essencial para Azure SQL para comunicação segura
+            "TrustServerCertificate=no;" # Essencial para Azure SQL (não confiar em certificados auto-assinados)
+            "Connection Timeout=30;" # Adiciona um timeout para evitar esperas infinitas na conexão
+        )
+        conn = pyodbc.connect(conn_string)
+        return conn
+    except pyodbc.Error as ex:
+        # Captura erros específicos do pyodbc para fornecer mensagens de erro mais úteis
+        sqlstate = ex.args[0]
+        st.error(f"⚠️ Erro de Conexão à Base de Dados (SQLSTATE: {sqlstate}): {ex}")
+        st.info("Por favor, verifique os seguintes pontos para resolver o problema de conexão:")
+        st.info(f"• As credenciais (AZURE_SQL_SERVER, AZURE_SQL_DATABASE, AZURE_SQL_USERNAME, AZURE_SQL_PASSWORD) nos secrets do Streamlit Cloud estão corretas e correspondem exatamente aos dados do Azure.")
+        st.info(f"• A firewall do Azure SQL Database SERVER ('{st.secrets.get('AZURE_SQL_SERVER', 'N/A')}') permite conexões de 'serviços e recursos do Azure'.")
+        st.info(f"• O '{DB_DRIVER}' (ODBC Driver 17 for SQL Server) foi instalado corretamente (verifique o log de deploy para erros de `pyodbc`).")
+        st.info(f"• O servidor ('{st.secrets.get('AZURE_SQL_SERVER', 'N/A')}') e a base de dados ('{st.secrets.get('AZURE_SQL_DATABASE', 'N/A')}') estão corretos e acessíveis publicamente (se não for rede virtual).")
+        st.error(f"Detalhes técnicos completos do erro para depuração: {ex}") # Detalhes completos do erro
+        return None
+
+def fetch_data(query, params=None):
+    """Executa uma query SELECT e retorna os resultados como um DataFrame."""
+    conn = get_db_connection() # Obtém a conexão (pode ser do cache)
+    if conn:
+        try:
+            # st.toast(f"A executar query: {query}") # Para depuração
+            df = pd.read_sql(query, conn, params=params)
+            return df
+        except Exception as e:
+            st.error(f"⛔ Erro ao executar a query SELECT: {e}")
+            st.error(f"Query: {query}")
+            if params: st.error(f"Parâmetros: {params}")
+            return pd.DataFrame()
+        finally:
+            # A conexão é fechada automaticamente pelo @st.cache_resource quando não é mais necessária,
+            # ou quando a app para. Não precisamos de conn.close() explícito aqui.
+            pass
+    return pd.DataFrame()
+
+def execute_query(query, params=None):
+    """Executa uma query INSERT, UPDATE ou DELETE."""
+    conn = get_db_connection() # Obtém a conexão (pode ser do cache)
+    if conn:
+        try:
+            cursor = conn.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            conn.commit() # Confirma as alterações na base de dados
+            return True
+        except Exception as e:
+            st.error(f"❌ Erro ao executar a query de modificação: {e}")
+            st.error(f"Query: {query}")
+            if params: st.error(f"Parâmetros: {params}")
+            return False
+        finally:
+            # A conexão é fechada automaticamente pelo @st.cache_resource.
+            pass
+    return False
+
 # --- Configurações da Página ---
 st.set_page_config(
     page_title="Sistema de Gestão de Horas",
