@@ -27,3 +27,7 @@ credentials.json
 
 # Windows
 Thumbs.db
+
+# .gitignore
+
+.streamlit/
