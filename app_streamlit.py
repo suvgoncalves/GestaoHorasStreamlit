@@ -15,7 +15,7 @@ from io import BytesIO # Para lidar com o PDF em memória
 
 # --- Configurações da Base de Dados ---
 # O DB_DRIVER é fixo para o ODBC Driver 17 for SQL Server, essencial para Azure SQL.
-DB_DRIVER = '{ODBC Driver 17 for SQL Server}' 
+DB_DRIVER = '{ODBC Driver 18 for SQL Server}' 
 
 # As credenciais da base de dados NÃO DEVEM ser hardcoded aqui.
 # Elas serão lidas de st.secrets, que por sua vez obtém os valores de:
@@ -41,11 +41,11 @@ def get_db_connection():
         azure_sql_password = st.secrets["AZURE_SQL_PASSWORD"]
 
         conn_string = (
-            f"DRIVER={DB_DRIVER};"
-            f"SERVER=tcp:{azure_sql_server},1433;" # Importante: 'tcp:' e porta 1433 para Azure SQL
-            f"DATABASE={azure_sql_database};"
-            f"UID={azure_sql_username};"
-            f"PWD={azure_sql_password};"
+            f"DRIVER={ODBC Driver 18 for SQL Server};"
+            f"SERVER=tcp:gestaohoras-server-susana-goncalves.database.windows.net,1433" # Importante: 'tcp:' e porta 1433 para Azure SQL
+            f"DATABASE={GestaoHoras};"
+            f"UID={Susanavgoncalves};"
+            f"PWD={Joninh@s2022};"
             "Encrypt=yes;"       # Essencial para Azure SQL para comunicação segura
             "TrustServerCertificate=no;" # Essencial para Azure SQL (não confiar em certificados auto-assinados)
             "Connection Timeout=30;" # Adiciona um timeout para evitar esperas infinitas na conexão
@@ -309,9 +309,9 @@ st.markdown("""
 # *** Conforme a sua captura de ecrã, é 'SusanaGonçalves\\SQLEXPRESS' ***
 # *** Se o seu computador não se chama 'SusanaGonçalves', ALTERE esta linha! ***
 # ********************************************************************************
-DB_SERVER = 'SusanaGonçalves\\SQLEXPRESS'
+DB_SERVER = "gestaohoras-server-susana-goncalves.database.windows.net"
 DB_DATABASE = 'GestaoHoras'
-DB_DRIVER = '{ODBC Driver 17 for SQL Server}' # Certifique-se que tem este driver instalado
+DB_DRIVER = '{ODBC Driver 18 for SQL Server}' # Certifique-se que tem este driver instalado
 
 # --- Funções de Conexão à Base de Dados ---
 @st.cache_resource
